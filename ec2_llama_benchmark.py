@@ -3,14 +3,16 @@ import logging
 import time
 import paramiko
 import os
+import yaml
 from datetime import datetime
 
 class EC2LlamaBenchmark:
-    def __init__(self, download_instance_type: str = "t4g.medium", 
-                 benchmark_instance_type: str = "t4g.xlarge",
-                 volume_id: str = None):
+    def __init__(self, 
+                 download_instance_type: str = "t4g.medium", 
+                 volume_id: str = None
+                 ):
+        
         self.download_instance_type = download_instance_type
-        self.benchmark_instance_type = benchmark_instance_type
         self.volume_id = volume_id  # If provided, skip download phase
         
         self.ec2_client = boto3.client('ec2')
@@ -21,7 +23,7 @@ class EC2LlamaBenchmark:
         self.elastic_ip = None
         self.elastic_ip_allocation_id = None
         self.ssh_user="ec2-user"
-        self.ask_before_terminate = False
+        self.ask_before_terminate = True
         
         # Get default VPC
         vpcs = list(self.ec2_resource.vpcs.filter(
@@ -75,7 +77,7 @@ class EC2LlamaBenchmark:
         self.ec2_client.detach_volume(VolumeId=volume_id)
         waiter.wait(VolumeIds=[volume_id])
 
-    def download_model(self):
+    def download_model(self, models: list) -> str:
         """Launch a small instance and download the model to EBS"""
         if self.volume_id:
             logging.info(f"Using existing volume {self.volume_id}")
@@ -93,10 +95,22 @@ sudo mkfs -t xfs /dev/sdh
 sudo mkdir /data
 sudo mount /dev/sdh /data
 sudo chown {self.ssh_user}:{self.ssh_user} /data
-wget https://huggingface.co/bartowski/DeepSeek-R1-Distill-Llama-70B-GGUF/resolve/main/DeepSeek-R1-Distill-Llama-70B-Q4_0.gguf --directory-prefix=/data --show-progress
+sudo yum install -y python3-pip
+pip install "huggingface_hub[hf_transfer]" hf_transfer
 """
         self._run_remote_commands(user_data)
-        
+
+        for model in models:
+            model_name = model['Name']
+            model_url = model['URL']
+            model_repoid = model['RepoId']
+            model_filename = model['Filename']
+            download_command = f"""#!/bin/bash -x
+HF_HUB_ENABLE_HF_TRANSFER=1 huggingface-cli download {model_repoid} {model_filename} --local-dir /data
+"""
+            logging.info(f"Downloading model {model_filename} from {model_repoid}")
+            self._run_remote_commands(download_command)
+
         # Detach volume and terminate instance
         logging.info(f"Model download completed. Detaching volume {volume_id}")
         self.detach_volume(volume_id)
@@ -106,22 +120,16 @@ wget https://huggingface.co/bartowski/DeepSeek-R1-Distill-Llama-70B-GGUF/resolve
         logging.info(f"Model download process completed successfully. Volume ID: {volume_id}")
         return volume_id
 
-    def run_benchmark(self):
-        """Launch the benchmark instance and run the test"""
-        if not self.volume_id:
-            raise ValueError("No volume_id specified for benchmark")
-
-        logging.info(f"Starting benchmark process using instance type {self.benchmark_instance_type}")
-        # Launch the larger instance
-        self.instance_id = self._launch_instance(self.benchmark_instance_type, instanceName='llama-benchmark')
-        
-        # Attach the model volume as read-only
+    def setup_benchmark_instance(self, instance_type: str, volume_id: str):
+        """Setup the benchmark instance with the model volume attached"""
+        logging.info(f"Setting up benchmark instance with volume {volume_id}")
+        self.instance_id = self._launch_instance(instance_type, instanceName='llama-benchmark')
         self.ec2_client.attach_volume(
             Device='/dev/sdh',
             InstanceId=self.instance_id,
-            VolumeId=self.volume_id
+            VolumeId=volume_id
         )
-        
+        logging.info(f"Benchmark instance {self.instance_id} setup completed successfully")
         logging.info(f"Volume attached successfully. Installing requirements and starting benchmark...")
         # Install requirements and run benchmark
         user_data = f"""#!/bin/bash
@@ -132,8 +140,22 @@ sudo yum update
 sudo yum -y groupinstall "Development Tools"
 sudo yum install -y python3-pip git cmake
 git clone https://github.com/ggerganov/llama.cpp.git
-cd ~/llama.cpp/ && cmake -B build -DCMAKE_CXX_FLAGS="-mcpu=native" -DCMAKE_C_FLAGS="-mcpu=native" && cmake --build build -v --config Release -j $nproc
-~/llama.cpp/build/bin/llama-cli -m /data/models/DeepSeek-R1-Distill-Llama-70B-Q4_0.gguf -p "Building a visually appealing website can be done in ten simple steps:/" -n 512 -t 64 -no-cnv
+cd ~/llama.cpp/ && cmake -B build -DCMAKE_CXX_FLAGS="-mcpu=native" -DCMAKE_C_FLAGS="-mcpu=native" && cmake --build build -v --config Release -j $(nproc)
+"""
+        return self._run_remote_commands(user_data)
+    
+    def run_benchmark(self, 
+                      prompt: str, 
+                      tokens: int, 
+                      models: list):
+        """Launch the benchmark instance and run the test"""
+        if not self.volume_id:
+            raise ValueError("No volume_id specified for benchmark")
+
+        for model in models:
+            model_name = model['Name']
+            user_data = f"""#!/bin/bash
+~/llama.cpp/build/bin/llama-cli -m /data/{model_name} -p "{prompt}" -n {tokens} -t $(nproc) -no-cnv
 """
         return self._run_remote_commands(user_data)
 
@@ -346,12 +368,16 @@ def main():
     )
     logging.getLogger("paramiko").setLevel(logging.INFO) # Set paramiko logging level
     
+    # Load config file
+    with open('benchmark.yaml', 'r') as f:
+        config = yaml.safe_load(f)
+    
     # Initialize the benchmark with existing volume ID if available
     volume_id = os.getenv('LLAMA_VOLUME_ID')
-    volume_id='vol-00dfe87bb3cb12e51'
+    volume_id='vol-05ae89dfb0e0d1325'
     logging.info(f"Starting LLaMa benchmark with volume_id={volume_id}")
+        
     benchmark = EC2LlamaBenchmark(
-        benchmark_instance_type="c8g.8xlarge",
         volume_id=volume_id
     )
     
@@ -361,13 +387,28 @@ def main():
         
         # Download model if needed
         if not benchmark.volume_id:
-            volume_id = benchmark.download_model()
+            models = config['Models']
+            logging.info(f"Downloading model with {models} models")
+            volume_id = benchmark.download_model(models)
             logging.info(f"Created volume {volume_id} with model")
             benchmark.volume_id = volume_id
-        
-        # Run benchmark
-        output = benchmark.run_benchmark()
-        print("Benchmark results:", output)
+
+        commands=config["Commands"]
+        instances=config["Instances"]
+        for instance in instances['CPU']:
+            logging.info(f"Setting up benchmark instance of type {instance}")
+            benchmark.setup_benchmark_instance(
+                instance_type=instance,
+                volume_id=benchmark.volume_id
+            )
+            for command in commands:
+                logging.info(f"Running benchmark {command}")
+                output = benchmark.run_benchmark(
+                    prompt=command['Prompt'],
+                    tokens=command['Tokens'],
+                    models=config['Models']
+                )
+                print("Benchmark results:", output)
         
     finally:
         # Cleanup but keep the volume

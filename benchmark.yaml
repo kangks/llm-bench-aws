@@ -1,0 +1,11 @@
+Models:
+- Name: DeepSeek-R1-Distill-Llama-70B-Q4_0.gguf
+  URL: https://huggingface.co/bartowski/DeepSeek-R1-Distill-Llama-70B-GGUF/resolve/main/DeepSeek-R1-Distill-Llama-70B-Q4_0.gguf
+  RepoId: bartowski/DeepSeek-R1-Distill-Llama-70B-GGUF
+  Filename: DeepSeek-R1-Distill-Llama-70B-Q4_0.gguf
+Commands:
+  - Prompt: "Building a visually appealing website can be done in ten simple steps:/"
+    Tokens: 512
+Instances:
+  CPU: 
+  - c8g.8xlarge
