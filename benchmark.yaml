@@ -6,6 +6,13 @@ Models:
 Commands:
   - Prompt: "Building a visually appealing website can be done in ten simple steps:/"
     Tokens: 512
+  - Prompt: "Building a visually appealing website can be done in ten simple steps:/"
+    Tokens: 2000
+  - Prompt: "John has 10 apples. He gives away 4 and then receives 5 more. How many apples does he have?"
+    Tokens: 512
+  - Prompt: "John has 10 apples. He gives away 4 and then receives 5 more. How many apples does he have?"
+    Tokens: 2000
 Instances:
   CPU: 
   - c8g.8xlarge
+  - r8g.2xlarge
