@@ -141,6 +141,7 @@ sudo yum -y groupinstall "Development Tools"
 sudo yum install -y python3-pip git cmake
 git clone https://github.com/ggerganov/llama.cpp.git
 cd ~/llama.cpp/ && cmake -B build -DCMAKE_CXX_FLAGS="-mcpu=native" -DCMAKE_C_FLAGS="-mcpu=native" && cmake --build build -v --config Release -j $(nproc)
+pip3 install -U langchain-core langchain-community llama-cpp-python
 """
         return self._run_remote_commands(user_data)
     
@@ -165,7 +166,6 @@ cd ~/llama.cpp/ && cmake -B build -DCMAKE_CXX_FLAGS="-mcpu=native" -DCMAKE_C_FLA
             # benchmark_results.append(self._run_remote_commands(llama_bench_command))
 
             langchain_command = f"""
-pip3 install -U langchain-core langchain-community llama-cpp-python
 python3 -c 'from langchain_core.callbacks import CallbackManager, StreamingStdOutCallbackHandler;from langchain_community.llms import LlamaCpp; llm = LlamaCpp(model_path="/data/{model_name}",callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]),verbose=True);llm.invoke("{prompt}");'
 """
             benchmark_results.append(self._run_remote_commands(langchain_command))
