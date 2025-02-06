@@ -124,6 +124,8 @@ class EC2LlamaBenchmark:
             ])
 
         # Detach volume and terminate instance
+        logging.debug(f"Model download completed. Detaching volume {volume_id}")
+        self.detach_volume(volume_id)
         logging.debug("Terminating download instance while keeping the volume")
         self.terminate_instance(keep_volume=True)
         
@@ -392,8 +394,6 @@ python3 -c 'from langchain_core.callbacks import CallbackManager, StreamingStdOu
 
         """Terminate instance and cleanup resources"""
         if self.instance_id:
-            logging.debug(f"Model download completed. Detaching volume {self.volume_id}")
-            self.detach_volume(self.volume_id)
             self.ec2_client.terminate_instances(InstanceIds=[self.instance_id])
             logging.info(f"Terminated instance {self.instance_id}")
             waiter = self.ec2_client.get_waiter('instance_terminated')
@@ -442,22 +442,22 @@ def main():
         subnet_id=args.subnet_id
     )
     
-    try:
-        # Create SSH key pair
-        benchmark.create_key_pair()
-        
-        # Download model if needed
-        if not benchmark.volume_id:
-            models = config['Models']
-            logging.debug(f"Downloading model with {models} models")
-            volume_id = benchmark.download_model(models)
-            logging.debug(f"Created volume {volume_id} with model")
-            benchmark.volume_id = volume_id
+    # Create SSH key pair
+    benchmark.create_key_pair()
+    
+    # Download model if needed
+    if not benchmark.volume_id:
+        models = config['Models']
+        logging.debug(f"Downloading model with {models} models")
+        volume_id = benchmark.download_model(models)
+        logging.debug(f"Created volume {volume_id} with model")
+        benchmark.volume_id = volume_id
 
-        commands=config["Commands"]
-        instances=config["Instances"]
-        for instance in instances:
-            logging.info(f"Setting up benchmark instance of type {instance}")
+    commands=config["Commands"]
+    instances=config["Instances"]
+    for instance in instances:
+        logging.info(f"Setting up benchmark instance of type {instance}")
+        try:
             benchmark.setup_benchmark_instance(
                 instance_type=instance["Type"],
                 instance_has_gpu=instance["Has_gpu"],
@@ -472,11 +472,11 @@ def main():
                     models=config['Models']
                 )
                 logging.debug(f"Benchmark results: {output}")
-        
-    finally:
-        # Cleanup but keep the volume
-        benchmark.terminate_instance(keep_volume=True)
-        logging.info(f"Model volume ID: {benchmark.volume_id}")
+    
+        finally:
+            # Cleanup but keep the volume
+            benchmark.terminate_instance(keep_volume=True)
+            logging.info(f"Model volume ID: {benchmark.volume_id}")
 
 if __name__ == '__main__':
     main()
