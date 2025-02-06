@@ -24,6 +24,7 @@ class EC2LlamaBenchmark:
         self.elastic_ip_allocation_id = None
         self.ssh_user="ec2-user"
         self.ask_before_terminate = True
+        self.download_instance_ami='ami-0e532fbed6ef00604'
         
         # Get default VPC
         vpcs = list(self.ec2_resource.vpcs.filter(
@@ -85,31 +86,32 @@ class EC2LlamaBenchmark:
 
         logging.debug(f"Initiating model download process using instance type {self.download_instance_type}")
         # Launch a small instance for downloading
-        self.instance_id = self._launch_instance(self.download_instance_type, instanceName='llama-download')
+        self.instance_id = self._launch_instance(
+            self.download_instance_type,
+            instance_ami=self.download_instance_ami, 
+            instanceName='llama-download')
         volume_id = self.create_and_attach_volume(self.instance_id)
         
         logging.debug("Preparing volume and initiating model download...")
         # Prepare the volume and download the model
-        user_data = f"""#!/bin/bash -x
-sudo mkfs -t xfs /dev/sdh
-sudo mkdir /data
-sudo mount /dev/sdh /data
-sudo chown {self.ssh_user}:{self.ssh_user} /data
-sudo yum install -y python3-pip
-pip install "huggingface_hub[hf_transfer]" hf_transfer
-"""
-        self._run_remote_commands(user_data)
+        self._run_remote_commands([
+            "sudo mkfs -t xfs /dev/sdh",
+            "sudo mkdir /data",
+            "sudo mount /dev/sdh /data",
+            f"sudo chown {self.ssh_user}:{self.ssh_user} /data",
+            "sudo yum install -y python3-pip",
+            "pip install \"huggingface_hub[hf_transfer]\" hf_transfer"
+        ])
 
         for model in models:
             model_name = model['Name']
             model_url = model['URL']
             model_repoid = model['RepoId']
             model_filename = model['Filename']
-            download_command = f"""#!/bin/bash -x
-HF_HUB_ENABLE_HF_TRANSFER=1 huggingface-cli download {model_repoid} {model_filename} --local-dir /data
-"""
             logging.debug(f"Downloading model {model_filename} from {model_repoid}")
-            self._run_remote_commands(download_command)
+            self._run_remote_commands([
+                f"HF_HUB_ENABLE_HF_TRANSFER=1 huggingface-cli download {model_repoid} {model_filename} --local-dir /data"
+            ])
 
         # Detach volume and terminate instance
         logging.debug(f"Model download completed. Detaching volume {volume_id}")
@@ -120,10 +122,18 @@ HF_HUB_ENABLE_HF_TRANSFER=1 huggingface-cli download {model_repoid} {model_filen
         logging.debug(f"Model download process completed successfully. Volume ID: {volume_id}")
         return volume_id
 
-    def setup_benchmark_instance(self, instance_type: str, volume_id: str):
+    def setup_benchmark_instance(self, 
+                                 instance_type: str, 
+                                 instance_has_gpu: bool,
+                                 instance_ami: str,
+                                 volume_id: str):
         """Setup the benchmark instance with the model volume attached"""
         logging.info(f"Setting up benchmark instance with volume {volume_id}")
-        self.instance_id = self._launch_instance(instance_type, instanceName='llama-benchmark')
+        self.instance_id = self._launch_instance(
+            instance_type, 
+            instance_ami=instance_ami,
+            instanceName='llama-benchmark')
+        
         self.ec2_client.attach_volume(
             Device='/dev/sdh',
             InstanceId=self.instance_id,
@@ -131,19 +141,29 @@ HF_HUB_ENABLE_HF_TRANSFER=1 huggingface-cli download {model_repoid} {model_filen
         )
         logging.debug(f"Benchmark instance {self.instance_id} setup completed successfully")
         logging.debug(f"Volume attached successfully. Installing requirements and starting benchmark...")
-        # Install requirements and run benchmark
-        user_data = f"""#!/bin/bash
-sudo mkdir /data
-sudo mount /dev/sdh /data
-cd /home/{self.ssh_user}
-sudo yum update
-sudo yum -y groupinstall "Development Tools"
-sudo yum install -y python3-pip git cmake
-git clone https://github.com/ggerganov/llama.cpp.git
-cd ~/llama.cpp/ && cmake -B build -DCMAKE_CXX_FLAGS="-mcpu=native" -DCMAKE_C_FLAGS="-mcpu=native" && cmake --build build -v --config Release -j $(nproc)
-pip3 install -U langchain-core langchain-community llama-cpp-python
-"""
-        return self._run_remote_commands(user_data)
+
+        commands = [
+            "sudo mkdir /data",
+            "sudo mount /dev/sdh /data",
+            f"cd /home/{self.ssh_user}",
+            "sudo yum update",
+            "sudo yum -y groupinstall \"Development Tools\"",
+            "sudo yum install -y python3-pip git cmake",
+            "pip3 install -U langchain-core langchain-community"
+        ]
+
+        if instance_has_gpu:
+            commands = commands+[
+                    "sudo dnf install -y nvidia-release",
+                    "sudo dnf install -y cuda-toolkit",
+                    f"""CMAKE_ARGS="-DGGML_CUDA=on" pip3 install llama-cpp-python --upgrade --force-reinstall --no-cache-dir""",
+                ]
+        else:
+            commands.append(
+                f"""pip3 install -U llama-cpp-python"""
+            )
+
+        return self._run_remote_commands(commands)
     
     def run_benchmark(self, 
                       prompt: str, 
@@ -165,14 +185,17 @@ pip3 install -U langchain-core langchain-community llama-cpp-python
 """
             # benchmark_results.append(self._run_remote_commands(llama_bench_command))
 
-            langchain_command = f"""
+            langchain_command = [f"""
 python3 -c 'from langchain_core.callbacks import CallbackManager, StreamingStdOutCallbackHandler;from langchain_community.llms import LlamaCpp; llm = LlamaCpp(model_path="/data/{model_name}",callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]),verbose=True);llm.invoke("{prompt}");'
-"""
+"""]
             benchmark_results.append(self._run_remote_commands(langchain_command))
 
         return benchmark_results
 
-    def _launch_instance(self, instance_type: str, instanceName: str):
+    def _launch_instance(self, 
+                         instance_type: str, 
+                         instance_ami: str, 
+                         instanceName: str):
         """Launch EC2 instance with basic setup"""
         logging.debug(f"Launching new EC2 instance of type {instance_type}")
         security_group_id = self.create_security_group()
@@ -228,7 +251,7 @@ python3 -c 'from langchain_core.callbacks import CallbackManager, StreamingStdOu
 
         logging.debug("Creating EC2 instance with Amazon LInux 2023")
         response = self.ec2_client.run_instances(
-            ImageId='ami-0e532fbed6ef00604',  # Amazon LInux 2023
+            ImageId=instance_ami, #'ami-0e532fbed6ef00604',  # Amazon LInux 2023
             InstanceType=instance_type,
             KeyName=self.key_name,
             MinCount=1,
@@ -267,7 +290,7 @@ python3 -c 'from langchain_core.callbacks import CallbackManager, StreamingStdOu
         
         return instance_id
 
-    def _run_remote_commands(self, commands: str) -> str:
+    def _run_remote_commands(self, commands: list) -> str:
         """Execute commands on the remote instance"""
         logging.info("Preparing to execute remote commands")
         key = paramiko.RSAKey.from_private_key_file(f"{self.key_name}.pem")
@@ -286,7 +309,7 @@ python3 -c 'from langchain_core.callbacks import CallbackManager, StreamingStdOu
             ssh.connect(hostname=public_ip, username=self.ssh_user, pkey=key)
             
             # Execute commands
-            for command in commands.split('\n'):
+            for command in commands:
                 if command.strip():
                     logging.info(f"Executing SSH command: {command}")
                     stdin, stdout, stderr = ssh.exec_command(command)
@@ -408,10 +431,12 @@ def main():
 
         commands=config["Commands"]
         instances=config["Instances"]
-        for instance in instances['CPU']:
-            logging.debug(f"Setting up benchmark instance of type {instance}")
+        for instance in instances:
+            logging.info(f"Setting up benchmark instance of type {instance}")
             benchmark.setup_benchmark_instance(
-                instance_type=instance,
+                instance_type=instance["Type"],
+                instance_has_gpu=instance["Has_gpu"],
+                instance_ami=instance["Ami"],
                 volume_id=benchmark.volume_id
             )
             for command in commands:
@@ -421,7 +446,7 @@ def main():
                     tokens=command['Tokens'],
                     models=config['Models']
                 )
-                logging.info(f"Benchmark results: {output}")
+                logging.debug(f"Benchmark results: {output}")
         
     finally:
         # Cleanup but keep the volume
