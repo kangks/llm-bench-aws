@@ -162,9 +162,9 @@ cd ~/llama.cpp/ && cmake -B build -DCMAKE_CXX_FLAGS="-mcpu=native" -DCMAKE_C_FLA
             llama_bench_command = f"""#!/bin/bash
 ~/llama.cpp/build/bin//llama-bench -m /data/{model_name} --output jsonl --flash-attn 1 --n-prompt {len(prompt)} --n-gen {tokens} -pg {len(prompt)},{tokens}
 """
-            benchmark_results.append(self._run_remote_commands(llama_bench_command))
+            # benchmark_results.append(self._run_remote_commands(llama_bench_command))
 
-            langchain_command = """
+            langchain_command = f"""
 pip3 install -U langchain-core langchain-community llama-cpp-python
 python3 -c 'from langchain_core.callbacks import CallbackManager, StreamingStdOutCallbackHandler;from langchain_community.llms import LlamaCpp; llm = LlamaCpp(model_path="/data/{model_name}",callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]),verbose=True);llm.invoke("{prompt}");'
 """
@@ -228,7 +228,7 @@ python3 -c 'from langchain_core.callbacks import CallbackManager, StreamingStdOu
 
         logging.debug("Creating EC2 instance with Amazon LInux 2023")
         response = self.ec2_client.run_instances(
-            ImageId='ami-0b29c89c15cfb8a6d',  # Amazon LInux 2023
+            ImageId='ami-0e532fbed6ef00604',  # Amazon LInux 2023
             InstanceType=instance_type,
             KeyName=self.key_name,
             MinCount=1,
