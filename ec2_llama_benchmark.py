@@ -152,15 +152,25 @@ cd ~/llama.cpp/ && cmake -B build -DCMAKE_CXX_FLAGS="-mcpu=native" -DCMAKE_C_FLA
         if not self.volume_id:
             raise ValueError("No volume_id specified for benchmark")
 
+        benchmark_results = []
+
         for model in models:
             model_name = model['Name']
             llama_cli_command = f"""#!/bin/bash
 ~/llama.cpp/build/bin/llama-cli -m /data/{model_name} -p "{prompt}" -n {tokens} -t $(nproc) -no-cnv
 """
             llama_bench_command = f"""#!/bin/bash
-~/llama.cpp/build/bin//llama-bench -m /data/{model_name} --output jsonl --flash-attn --n-prompt {len(prompt)} --n-gen {tokens} -pg {len(prompt)},{tokens}
+~/llama.cpp/build/bin//llama-bench -m /data/{model_name} --output jsonl --flash-attn 1 --n-prompt {len(prompt)} --n-gen {tokens} -pg {len(prompt)},{tokens}
 """
-        return self._run_remote_commands(llama_bench_command)
+            benchmark_results.append(self._run_remote_commands(llama_bench_command))
+
+            langchain_command = """
+pip3 install -U langchain-core langchain-community llama-cpp-python
+python3 -c 'from langchain_core.callbacks import CallbackManager, StreamingStdOutCallbackHandler;from langchain_community.llms import LlamaCpp; llm = LlamaCpp(model_path="/data/{model_name}",callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]),verbose=True);llm.invoke("{prompt}");'
+"""
+            benchmark_results.append(self._run_remote_commands(langchain_command))
+
+        return benchmark_results
 
     def _launch_instance(self, instance_type: str, instanceName: str):
         """Launch EC2 instance with basic setup"""
@@ -411,7 +421,7 @@ def main():
                     tokens=command['Tokens'],
                     models=config['Models']
                 )
-                logging.info("Benchmark results: {output}")
+                logging.info(f"Benchmark results: {output}")
         
     finally:
         # Cleanup but keep the volume
