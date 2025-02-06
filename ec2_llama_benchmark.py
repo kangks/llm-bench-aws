@@ -33,10 +33,10 @@ class EC2LlamaBenchmark:
 
     def create_and_attach_volume(self, instance_id: str, device_name: str = '/dev/sdh') -> str:
         """Create a new EBS volume and attach it to the instance"""
-        logging.info(f"Creating new EBS volume for instance {instance_id}")
+        logging.debug(f"Creating new EBS volume for instance {instance_id}")
         instance = self.ec2_resource.Instance(instance_id)
         
-        logging.info(f"Creating 500GB gp3 volume in availability zone {instance.placement['AvailabilityZone']}")
+        logging.debug(f"Creating 500GB gp3 volume in availability zone {instance.placement['AvailabilityZone']}")
         volume = self.ec2_client.create_volume(
             AvailabilityZone=instance.placement['AvailabilityZone'],
             Size=500,
@@ -56,13 +56,13 @@ class EC2LlamaBenchmark:
         volume_id = volume['VolumeId']
         
         # Wait for volume to be available
-        logging.info(f"Waiting for volume {volume_id} to become available...")
+        logging.debug(f"Waiting for volume {volume_id} to become available...")
         waiter = self.ec2_client.get_waiter('volume_available')
         waiter.wait(VolumeIds=[volume_id])
-        logging.info(f"Volume {volume_id} is now available")
+        logging.debug(f"Volume {volume_id} is now available")
         
         # Attach volume
-        logging.info(f"Attaching volume {volume_id} to instance {instance_id} at {device_name}")
+        logging.debug(f"Attaching volume {volume_id} to instance {instance_id} at {device_name}")
         self.ec2_client.attach_volume(
             Device=device_name,
             InstanceId=instance_id,
@@ -83,12 +83,12 @@ class EC2LlamaBenchmark:
             logging.info(f"Using existing volume {self.volume_id}")
             return self.volume_id
 
-        logging.info(f"Initiating model download process using instance type {self.download_instance_type}")
+        logging.debug(f"Initiating model download process using instance type {self.download_instance_type}")
         # Launch a small instance for downloading
         self.instance_id = self._launch_instance(self.download_instance_type, instanceName='llama-download')
         volume_id = self.create_and_attach_volume(self.instance_id)
         
-        logging.info("Preparing volume and initiating model download...")
+        logging.debug("Preparing volume and initiating model download...")
         # Prepare the volume and download the model
         user_data = f"""#!/bin/bash -x
 sudo mkfs -t xfs /dev/sdh
@@ -108,16 +108,16 @@ pip install "huggingface_hub[hf_transfer]" hf_transfer
             download_command = f"""#!/bin/bash -x
 HF_HUB_ENABLE_HF_TRANSFER=1 huggingface-cli download {model_repoid} {model_filename} --local-dir /data
 """
-            logging.info(f"Downloading model {model_filename} from {model_repoid}")
+            logging.debug(f"Downloading model {model_filename} from {model_repoid}")
             self._run_remote_commands(download_command)
 
         # Detach volume and terminate instance
-        logging.info(f"Model download completed. Detaching volume {volume_id}")
+        logging.debug(f"Model download completed. Detaching volume {volume_id}")
         self.detach_volume(volume_id)
-        logging.info("Terminating download instance while keeping the volume")
+        logging.debug("Terminating download instance while keeping the volume")
         self.terminate_instance(keep_volume=True)
         
-        logging.info(f"Model download process completed successfully. Volume ID: {volume_id}")
+        logging.debug(f"Model download process completed successfully. Volume ID: {volume_id}")
         return volume_id
 
     def setup_benchmark_instance(self, instance_type: str, volume_id: str):
@@ -129,8 +129,8 @@ HF_HUB_ENABLE_HF_TRANSFER=1 huggingface-cli download {model_repoid} {model_filen
             InstanceId=self.instance_id,
             VolumeId=volume_id
         )
-        logging.info(f"Benchmark instance {self.instance_id} setup completed successfully")
-        logging.info(f"Volume attached successfully. Installing requirements and starting benchmark...")
+        logging.debug(f"Benchmark instance {self.instance_id} setup completed successfully")
+        logging.debug(f"Volume attached successfully. Installing requirements and starting benchmark...")
         # Install requirements and run benchmark
         user_data = f"""#!/bin/bash
 sudo mkdir /data
@@ -154,14 +154,17 @@ cd ~/llama.cpp/ && cmake -B build -DCMAKE_CXX_FLAGS="-mcpu=native" -DCMAKE_C_FLA
 
         for model in models:
             model_name = model['Name']
-            user_data = f"""#!/bin/bash
+            llama_cli_command = f"""#!/bin/bash
 ~/llama.cpp/build/bin/llama-cli -m /data/{model_name} -p "{prompt}" -n {tokens} -t $(nproc) -no-cnv
 """
-        return self._run_remote_commands(user_data)
+            llama_bench_command = f"""#!/bin/bash
+~/llama.cpp/build/bin//llama-bench -m /data/{model_name} --output jsonl --flash-attn --n-prompt {len(prompt)} --n-gen {tokens} -pg {len(prompt)},{tokens}
+"""
+        return self._run_remote_commands(llama_bench_command)
 
     def _launch_instance(self, instance_type: str, instanceName: str):
         """Launch EC2 instance with basic setup"""
-        logging.info(f"Launching new EC2 instance of type {instance_type}")
+        logging.debug(f"Launching new EC2 instance of type {instance_type}")
         security_group_id = self.create_security_group()
         
         # Get public subnet
@@ -187,7 +190,7 @@ cd ~/llama.cpp/ && cmake -B build -DCMAKE_CXX_FLAGS="-mcpu=native" -DCMAKE_C_FLA
                 {'Name': 'association.subnet-id', 'Values': [subnet['SubnetId']]},
                 {'Name': 'vpc-id', 'Values': [self.vpc.id]}
             ]
-            logging.info(f"Checking subnet {subnet['SubnetId']} in VPC {self.vpc.id} using filter {filter}")
+            logging.debug(f"Checking subnet {subnet['SubnetId']} in VPC {self.vpc.id} using filter {filter}")
             route_tables = self.ec2_client.describe_route_tables(
                 Filters=filter
             )
@@ -195,15 +198,15 @@ cd ~/llama.cpp/ && cmake -B build -DCMAKE_CXX_FLAGS="-mcpu=native" -DCMAKE_C_FLA
             is_public = False
             if route_tables['RouteTables']:
                 # Subnet has explicit route table association
-                logging.info(f"Found subnet {subnet['SubnetId']} with explicit route table association")
+                logging.debug(f"Found subnet {subnet['SubnetId']} with explicit route table association")
                 for route_table in route_tables['RouteTables']:
-                    logging.info(f"Checking route table {route_table['RouteTableId']} for public subnet")
+                    logging.debug(f"Checking route table {route_table['RouteTableId']} for public subnet")
                     if any(route.get('GatewayId', '').startswith('igw-') for route in route_table['Routes']):
                         is_public = True
                         break
             else:
                 # Subnet uses main route table
-                logging.info(f"Subnet {subnet['SubnetId']} uses main route table")
+                logging.debug(f"Subnet {subnet['SubnetId']} uses main route table")
                 is_public = main_has_igw
             
             if is_public:
@@ -213,7 +216,7 @@ cd ~/llama.cpp/ && cmake -B build -DCMAKE_CXX_FLAGS="-mcpu=native" -DCMAKE_C_FLA
         if not public_subnet:
             raise ValueError(f"No public subnet found in the default VPC {self.vpc.id}") 
 
-        logging.info("Creating EC2 instance with Amazon LInux 2023")
+        logging.debug("Creating EC2 instance with Amazon LInux 2023")
         response = self.ec2_client.run_instances(
             ImageId='ami-0b29c89c15cfb8a6d',  # Amazon LInux 2023
             InstanceType=instance_type,
@@ -289,9 +292,9 @@ cd ~/llama.cpp/ && cmake -B build -DCMAKE_CXX_FLAGS="-mcpu=native" -DCMAKE_C_FLA
 
     def create_security_group(self):
         """Create security group for SSH access"""
-        logging.info("Setting up security group for SSH access")
+        logging.debug("Setting up security group for SSH access")
         try:
-            logging.info("Creating new security group 'llama-benchmark-sg'")
+            logging.debug("Creating new security group 'llama-benchmark-sg'")
             response = self.ec2_client.create_security_group(
                 GroupName='llama-benchmark-sg',
                 Description='Security group for Llama benchmark'
@@ -388,32 +391,32 @@ def main():
         # Download model if needed
         if not benchmark.volume_id:
             models = config['Models']
-            logging.info(f"Downloading model with {models} models")
+            logging.debug(f"Downloading model with {models} models")
             volume_id = benchmark.download_model(models)
-            logging.info(f"Created volume {volume_id} with model")
+            logging.debug(f"Created volume {volume_id} with model")
             benchmark.volume_id = volume_id
 
         commands=config["Commands"]
         instances=config["Instances"]
         for instance in instances['CPU']:
-            logging.info(f"Setting up benchmark instance of type {instance}")
+            logging.debug(f"Setting up benchmark instance of type {instance}")
             benchmark.setup_benchmark_instance(
                 instance_type=instance,
                 volume_id=benchmark.volume_id
             )
             for command in commands:
-                logging.info(f"Running benchmark {command}")
+                logging.debug(f"Running benchmark {command}")
                 output = benchmark.run_benchmark(
                     prompt=command['Prompt'],
                     tokens=command['Tokens'],
                     models=config['Models']
                 )
-                print("Benchmark results:", output)
+                logging.info("Benchmark results: {output}")
         
     finally:
         # Cleanup but keep the volume
         benchmark.terminate_instance(keep_volume=True)
-        print(f"Model volume ID: {benchmark.volume_id}")
+        logging.info(f"Model volume ID: {benchmark.volume_id}")
 
 if __name__ == '__main__':
     main()
