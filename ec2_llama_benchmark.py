@@ -4,12 +4,15 @@ import time
 import paramiko
 import os
 import yaml
+import argparse
 from datetime import datetime
 
 class EC2LlamaBenchmark:
     def __init__(self, 
                  download_instance_type: str = "t4g.medium", 
-                 volume_id: str = None
+                 volume_id: str = None,
+                 vpc_id: str = None,
+                 subnet_id: str = None
                  ):
         
         self.download_instance_type = download_instance_type
@@ -18,19 +21,25 @@ class EC2LlamaBenchmark:
         self.ec2_client = boto3.client('ec2')
         self.ec2_resource = boto3.resource('ec2')
         self.key_name = 'llama-benchmark-key'
-        self.instance_id = None
+        # self.instance_id = None
         self.instance = None
         self.elastic_ip = None
         self.elastic_ip_allocation_id = None
         self.ssh_user="ec2-user"
-        self.ask_before_terminate = True
+        self.ask_before_terminate = False
         self.download_instance_ami='ami-0e532fbed6ef00604'
         
-        # Get default VPC
-        vpcs = list(self.ec2_resource.vpcs.filter(
-            Filters=[{'Name': 'isDefault', 'Values': ['true']}]
-        ))
-        self.vpc = vpcs[0] if vpcs else None
+        # Get VPC
+        if vpc_id:
+            self.vpc = self.ec2_resource.Vpc(vpc_id)
+        else:
+            # Get default VPC
+            vpcs = list(self.ec2_resource.vpcs.filter(
+                Filters=[{'Name': 'isDefault', 'Values': ['true']}]
+            ))
+            self.vpc = vpcs[0] if vpcs else None
+            
+        self.subnet_id = subnet_id  # Store subnet_id if provided
 
     def create_and_attach_volume(self, instance_id: str, device_name: str = '/dev/sdh') -> str:
         """Create a new EBS volume and attach it to the instance"""
@@ -75,6 +84,7 @@ class EC2LlamaBenchmark:
     def detach_volume(self, volume_id: str):
         """Detach an EBS volume"""
         waiter = self.ec2_client.get_waiter('volume_available')
+        logging.info(f"Waiting for volume {volume_id} to be detached...")
         self.ec2_client.detach_volume(VolumeId=volume_id)
         waiter.wait(VolumeIds=[volume_id])
 
@@ -114,8 +124,6 @@ class EC2LlamaBenchmark:
             ])
 
         # Detach volume and terminate instance
-        logging.debug(f"Model download completed. Detaching volume {volume_id}")
-        self.detach_volume(volume_id)
         logging.debug("Terminating download instance while keeping the volume")
         self.terminate_instance(keep_volume=True)
         
@@ -200,54 +208,60 @@ python3 -c 'from langchain_core.callbacks import CallbackManager, StreamingStdOu
         logging.debug(f"Launching new EC2 instance of type {instance_type}")
         security_group_id = self.create_security_group()
         
-        # Get public subnet
-        subnets = self.ec2_client.describe_subnets(
-            Filters=[{'Name': 'vpc-id', 'Values': [self.vpc.id]}]
-        )
-        public_subnet = None
-
-        # Get main route table of the VPC
-        main_route_table = self.ec2_client.describe_route_tables(
-            Filters=[
-                {'Name': 'vpc-id', 'Values': [self.vpc.id]},
-                {'Name': 'association.main', 'Values': ['true']}
-            ]
-        )['RouteTables'][0]
-        
-        # Check if main route table has internet gateway
-        main_has_igw = any(route.get('GatewayId', '').startswith('igw-') for route in main_route_table['Routes'])
-        
-        for subnet in subnets['Subnets']:
-            # First check explicit route table associations
-            filter=[
-                {'Name': 'association.subnet-id', 'Values': [subnet['SubnetId']]},
-                {'Name': 'vpc-id', 'Values': [self.vpc.id]}
-            ]
-            logging.debug(f"Checking subnet {subnet['SubnetId']} in VPC {self.vpc.id} using filter {filter}")
-            route_tables = self.ec2_client.describe_route_tables(
-                Filters=filter
+        # Use provided subnet_id or find a public subnet
+        if self.subnet_id:
+            subnet_id = self.subnet_id
+        else:
+            # Get public subnet
+            subnets = self.ec2_client.describe_subnets(
+                Filters=[{'Name': 'vpc-id', 'Values': [self.vpc.id]}]
             )
-            
-            is_public = False
-            if route_tables['RouteTables']:
-                # Subnet has explicit route table association
-                logging.debug(f"Found subnet {subnet['SubnetId']} with explicit route table association")
-                for route_table in route_tables['RouteTables']:
-                    logging.debug(f"Checking route table {route_table['RouteTableId']} for public subnet")
-                    if any(route.get('GatewayId', '').startswith('igw-') for route in route_table['Routes']):
-                        is_public = True
-                        break
-            else:
-                # Subnet uses main route table
-                logging.debug(f"Subnet {subnet['SubnetId']} uses main route table")
-                is_public = main_has_igw
-            
-            if is_public:
-                public_subnet = subnet['SubnetId']
-                break
+            public_subnet = None
 
-        if not public_subnet:
-            raise ValueError(f"No public subnet found in the default VPC {self.vpc.id}") 
+            # Get main route table of the VPC
+            main_route_table = self.ec2_client.describe_route_tables(
+                Filters=[
+                    {'Name': 'vpc-id', 'Values': [self.vpc.id]},
+                    {'Name': 'association.main', 'Values': ['true']}
+                ]
+            )['RouteTables'][0]
+            
+            # Check if main route table has internet gateway
+            main_has_igw = any(route.get('GatewayId', '').startswith('igw-') for route in main_route_table['Routes'])
+            
+            for subnet in subnets['Subnets']:
+                # First check explicit route table associations
+                filter=[
+                    {'Name': 'association.subnet-id', 'Values': [subnet['SubnetId']]},
+                    {'Name': 'vpc-id', 'Values': [self.vpc.id]}
+                ]
+                logging.debug(f"Checking subnet {subnet['SubnetId']} in VPC {self.vpc.id} using filter {filter}")
+                route_tables = self.ec2_client.describe_route_tables(
+                    Filters=filter
+                )
+                
+                is_public = False
+                if route_tables['RouteTables']:
+                    # Subnet has explicit route table association
+                    logging.debug(f"Found subnet {subnet['SubnetId']} with explicit route table association")
+                    for route_table in route_tables['RouteTables']:
+                        logging.debug(f"Checking route table {route_table['RouteTableId']} for public subnet")
+                        if any(route.get('GatewayId', '').startswith('igw-') for route in route_table['Routes']):
+                            is_public = True
+                            break
+                else:
+                    # Subnet uses main route table
+                    logging.debug(f"Subnet {subnet['SubnetId']} uses main route table")
+                    is_public = main_has_igw
+                
+                if is_public:
+                    public_subnet = subnet['SubnetId']
+                    break
+
+            if not public_subnet:
+                raise ValueError(f"No public subnet found in the VPC {self.vpc.id}")
+            
+            subnet_id = public_subnet 
 
         logging.debug("Creating EC2 instance with Amazon LInux 2023")
         response = self.ec2_client.run_instances(
@@ -257,7 +271,7 @@ python3 -c 'from langchain_core.callbacks import CallbackManager, StreamingStdOu
             MinCount=1,
             MaxCount=1,
             SecurityGroupIds=[security_group_id],
-            SubnetId=public_subnet,
+            SubnetId=subnet_id,
             BlockDeviceMappings=[{
                 'DeviceName': '/dev/sda1',
                 'Ebs': {
@@ -378,6 +392,8 @@ python3 -c 'from langchain_core.callbacks import CallbackManager, StreamingStdOu
 
         """Terminate instance and cleanup resources"""
         if self.instance_id:
+            logging.debug(f"Model download completed. Detaching volume {self.volume_id}")
+            self.detach_volume(self.volume_id)
             self.ec2_client.terminate_instances(InstanceIds=[self.instance_id])
             logging.info(f"Terminated instance {self.instance_id}")
             waiter = self.ec2_client.get_waiter('instance_terminated')
@@ -404,17 +420,26 @@ def main():
     )
     logging.getLogger("paramiko").setLevel(logging.INFO) # Set paramiko logging level
     
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Run LLaMa benchmark on EC2')
+    parser.add_argument('--data-volume-id', type=str, required=False,
+                      help='The volume ID containing the LLaMa model data')
+    parser.add_argument('--vpc-id', type=str, required=False,
+                      help='VPC ID to use for instances. If not provided, default VPC will be used')
+    parser.add_argument('--subnet-id', type=str, required=False,
+                      help='Subnet ID to use for instances. If not provided, a public subnet will be selected')
+    args = parser.parse_args()
+    
     # Load config file
     with open('benchmark.yaml', 'r') as f:
         config = yaml.safe_load(f)
     
-    # Initialize the benchmark with existing volume ID if available
-    volume_id = os.getenv('LLAMA_VOLUME_ID')
-    volume_id='vol-05ae89dfb0e0d1325'
-    logging.info(f"Starting LLaMa benchmark with volume_id={volume_id}")
+    logging.info(f"Starting LLaMa benchmark with volume_id={args.data_volume_id}, vpc_id={args.vpc_id}, subnet_id={args.subnet_id}")
         
     benchmark = EC2LlamaBenchmark(
-        volume_id=volume_id
+        volume_id=args.data_volume_id,
+        vpc_id=args.vpc_id,
+        subnet_id=args.subnet_id
     )
     
     try:
