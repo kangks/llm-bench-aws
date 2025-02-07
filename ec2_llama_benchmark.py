@@ -26,7 +26,7 @@ class EC2LlamaBenchmark:
         self.elastic_ip = None
         self.elastic_ip_allocation_id = None
         self.ssh_user="ec2-user"
-        self.ask_before_terminate = False
+        self.ask_before_terminate = True
         self.download_instance_ami='ami-0e532fbed6ef00604'
         
         # Get VPC
@@ -156,14 +156,18 @@ class EC2LlamaBenchmark:
             "sudo mkdir /data",
             "sudo mount /dev/sdh /data",
             f"cd /home/{self.ssh_user}",
-            "sudo yum update",
+        ]
+
+        commands += "" if instance_has_gpu else "sudo yum update"
+        
+        commands += [
             "sudo yum -y groupinstall \"Development Tools\"",
             "sudo yum install -y python3-pip git cmake",
             "pip3 install -U langchain-core langchain-community"
         ]
 
         if instance_has_gpu:
-            commands = commands+[
+            commands += [
                     "sudo dnf install -y nvidia-release",
                     "sudo dnf install -y cuda-toolkit",
                     f"""CMAKE_ARGS="-DGGML_CUDA=on" pip3 install llama-cpp-python --upgrade --force-reinstall --no-cache-dir""",
@@ -178,7 +182,8 @@ class EC2LlamaBenchmark:
     def run_benchmark(self, 
                       prompt: str, 
                       tokens: int, 
-                      models: list):
+                      models: list,
+                      instance_has_gpu: bool):
         """Launch the benchmark instance and run the test"""
         if not self.volume_id:
             raise ValueError("No volume_id specified for benchmark")
@@ -191,13 +196,30 @@ class EC2LlamaBenchmark:
 ~/llama.cpp/build/bin/llama-cli -m /data/{model_name} -p "{prompt}" -n {tokens} -t $(nproc) -no-cnv
 """
             llama_bench_command = f"""#!/bin/bash
-~/llama.cpp/build/bin//llama-bench -m /data/{model_name} --output jsonl --flash-attn 1 --n-prompt {len(prompt)} --n-gen {tokens} -pg {len(prompt)},{tokens}
+~/llama.cpp/build/bin/llama-bench -m /data/{model_name} --output jsonl --flash-attn 1 --n-prompt {len(prompt)} --n-gen {tokens} -pg {len(prompt)},{tokens}
 """
             # benchmark_results.append(self._run_remote_commands(llama_bench_command))
 
-            langchain_command = [f"""
+            if instance_has_gpu:
+                python_file_name= f"llm_{model_name}_{len(prompt)}.py"
+                langchain_command = [f"""
+cat > {python_file_name} <<EOF
+from langchain_core.callbacks import CallbackManager, StreamingStdOutCallbackHandler
+from langchain_community.llms import LlamaCpp
+llm = LlamaCpp(
+    model_path="/data/{model_name}",
+    callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]),
+    verbose=True,
+    n_gpu_layers=81)
+llm.invoke("{prompt}")
+EOF
+""",
+                f"python3 {python_file_name}"]
+            else:
+                langchain_command = [f"""
 python3 -c 'from langchain_core.callbacks import CallbackManager, StreamingStdOutCallbackHandler;from langchain_community.llms import LlamaCpp; llm = LlamaCpp(model_path="/data/{model_name}",callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]),verbose=True);llm.invoke("{prompt}");'
 """]
+                
             benchmark_results.append(self._run_remote_commands(langchain_command))
 
         return benchmark_results
@@ -469,7 +491,8 @@ def main():
                 output = benchmark.run_benchmark(
                     prompt=command['Prompt'],
                     tokens=command['Tokens'],
-                    models=config['Models']
+                    models=config['Models'],
+                    instance_has_gpu=instance["Has_gpu"],
                 )
                 logging.debug(f"Benchmark results: {output}")
     

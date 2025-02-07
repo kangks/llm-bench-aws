@@ -171,3 +171,27 @@ Benchmark results can be parse from the execution logs, such as using the comman
 | c8g.8xlarge   | IQ4_NL - 4.5 bpw | 269          | 10594.66       | 756.75                          | 1.32              |
 | c8g.8xlarge   | Q4_0             | 483          | 27550.83       | 120.83                          | 8.28              |
 | c8g.8xlarge   | IQ4_NL - 4.5 bpw | 483          | 20834.82       | 91.38                           | 10.94             |
+| g6e.2xlarge   | Q4_0             | 269          | 9408.24        | 672.01                          | 1.49              |
+| g6e.2xlarge   | IQ4_NL - 4.5 bpw | 269          | 1051.06        | 75.07                           | 13.32             |
+| g6e.2xlarge   | Q4_0             | 483          | 2272.20        | 9.97                            | 100.35            |
+| g6e.2xlarge   | IQ4_NL - 4.5 bpw | 483          | 2589.51        | 11.35                           | 88.08             |
+
+### GPU offload
+
+The llama is using `n_gpu_layers=81` for offload, 
+
+```
+[ec2-user@ip-172-31-20-238 ~]$ nvidia-smi
+Fri Feb  7 03:43:12 2025       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 560.35.03              Driver Version: 560.35.03      CUDA Version: 12.6     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA L40S                    On  |   00000000:30:00.0 Off |                    0 |
+| N/A   33C    P0            201W /  350W |   37503MiB /  46068MiB |     64%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+```
