@@ -157,17 +157,17 @@ benchmark = EC2LlamaBenchmark(instance_family="t2", instance_size="medium")
 
 Benchmark results can be parse from the execution logs, such as using the command `grep -e "instance of type" -e "print_info: file type" -e "llama_perf" <application log>.log`
 
-| Instance Type | LLM Model        | Load Time (ms) | Prompt Eval Time (ms per token) | Tokens Per Second |
-|---------------|------------------|----------------|---------------------------------|-------------------|
-| r8g.2xlarge   | Q4_0             | 18029.59       | 1287.82                         | 0.78              |
-| r8g.2xlarge   | IQ4_NL - 4.5 bpw | 11543.43       | 824.43                          | 1.21              |
-| r8g.2xlarge   | Q4_0             | 47132.87       | 206.72                          | 4.84              |
-| r8g.2xlarge   | IQ4_NL - 4.5 bpw | 50404.21       | 221.07                          | 4.52              |
-| m8g.4xlarge   | Q4_0             | 17378.94       | 1241.28                         | 0.81              |
-| m8g.4xlarge   | IQ4_NL - 4.5 bpw | 10839.76       | 774.26                          | 1.29              |
-| m8g.4xlarge   | Q4_0             | 33681.05       | 147.71                          | 6.77              |
-| m8g.4xlarge   | IQ4_NL - 4.5 bpw | 29484.77       | 129.32                          | 7.73              |
-| c8g.8xlarge   | Q4_0             | 17109.89       | 1222.07                         | 0.82              |
-| c8g.8xlarge   | IQ4_NL - 4.5 bpw | 10594.66       | 756.75                          | 1.32              |
-| c8g.8xlarge   | Q4_0             | 27550.83       | 120.83                          | 8.28              |
-| c8g.8xlarge   | IQ4_NL - 4.5 bpw | 20834.82       | 91.38                           | 10.94             |
+| Instance Type | LLM Model        | Total Tokens | Load Time (ms) | Prompt Eval Time (ms per token) | Tokens Per Second |
+|---------------|------------------|--------------|----------------|---------------------------------|-------------------|
+| r8g.2xlarge   | Q4_0             | 269          | 18029.59       | 1287.82                         | 0.78              |
+| r8g.2xlarge   | IQ4_NL - 4.5 bpw | 269          | 11543.43       | 824.43                          | 1.21              |
+| r8g.2xlarge   | Q4_0             | 483          | 47132.87       | 206.72                          | 4.84              |
+| r8g.2xlarge   | IQ4_NL - 4.5 bpw | 483          | 50404.21       | 221.07                          | 4.52              |
+| m8g.4xlarge   | Q4_0             | 269          | 17378.94       | 1241.28                         | 0.81              |
+| m8g.4xlarge   | IQ4_NL - 4.5 bpw | 269          | 10839.76       | 774.26                          | 1.29              |
+| m8g.4xlarge   | Q4_0             | 483          | 33681.05       | 147.71                          | 6.77              |
+| m8g.4xlarge   | IQ4_NL - 4.5 bpw | 483          | 29484.77       | 129.32                          | 7.73              |
+| c8g.8xlarge   | Q4_0             | 269          | 17109.89       | 1222.07                         | 0.82              |
+| c8g.8xlarge   | IQ4_NL - 4.5 bpw | 269          | 10594.66       | 756.75                          | 1.32              |
+| c8g.8xlarge   | Q4_0             | 483          | 27550.83       | 120.83                          | 8.28              |
+| c8g.8xlarge   | IQ4_NL - 4.5 bpw | 483          | 20834.82       | 91.38                           | 10.94             |
