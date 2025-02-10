@@ -171,8 +171,10 @@ Benchmark results can be parse from the execution logs, such as using the comman
 | c8g.8xlarge   | IQ4_NL - 4.5 bpw | 269          | 10594.66       | 756.75                          | 1.32              |
 | c8g.8xlarge   | Q4_0             | 483          | 27550.83       | 120.83                          | 8.28              |
 | c8g.8xlarge   | IQ4_NL - 4.5 bpw | 483          | 20834.82       | 91.38                           | 10.94             |
-| g6e.2xlarge   | Q4_0             | 269          | 9408.24        | 672.01                          | 1.49              |
-| g6e.2xlarge   | IQ4_NL - 4.5 bpw | 269          | 1051.06        | 75.07                           | 13.32             |
+
+| g6e.2xlarge   | Q4_0             | 269          |  335.40       |  23.95                         | 41.75              |
+| g6e.2xlarge   | IQ4_NL - 4.5 bpw | 269          | 536.62       | 38.26                           | 26.14             |
+
 | g6e.2xlarge   | Q4_0             | 483          | 2272.20        | 9.97                            | 100.35            |
 | g6e.2xlarge   | IQ4_NL - 4.5 bpw | 483          | 2589.51        | 11.35                           | 88.08             |
 

@@ -206,10 +206,12 @@ class EC2LlamaBenchmark:
 cat > {python_file_name} <<EOF
 from langchain_core.callbacks import CallbackManager, StreamingStdOutCallbackHandler
 from langchain_community.llms import LlamaCpp
+import multiprocessing
 llm = LlamaCpp(
     model_path="/data/{model_name}",
     callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]),
     verbose=True,
+    n_threads=multiprocessing.cpu_count() - 1,
     n_gpu_layers=81)
 llm.invoke("{prompt}")
 EOF
@@ -217,8 +219,19 @@ EOF
                 f"python3 {python_file_name}"]
             else:
                 langchain_command = [f"""
-python3 -c 'from langchain_core.callbacks import CallbackManager, StreamingStdOutCallbackHandler;from langchain_community.llms import LlamaCpp; llm = LlamaCpp(model_path="/data/{model_name}",callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]),verbose=True);llm.invoke("{prompt}");'
-"""]
+cat > {python_file_name} <<EOF
+from langchain_core.callbacks import CallbackManager, StreamingStdOutCallbackHandler
+from langchain_community.llms import LlamaCpp
+import multiprocessing
+llm = LlamaCpp(
+    model_path="/data/{model_name}",
+    callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]),
+    verbose=True,
+    n_threads=multiprocessing.cpu_count() - 1)
+llm.invoke("{prompt}")
+EOF
+""",
+                f"python3 {python_file_name}"]
                 
             benchmark_results.append(self._run_remote_commands(langchain_command))
 
