@@ -203,31 +203,37 @@ class EC2LlamaBenchmark:
             if instance_has_gpu:
                 python_file_name= f"llm_{model_name}_{len(prompt)}.py"
                 langchain_command = [f"""
-cat > {python_file_name} <<EOF
-from langchain_core.callbacks import CallbackManager, StreamingStdOutCallbackHandler
-from langchain_community.llms import LlamaCpp
-import multiprocessing
-llm = LlamaCpp(
-    model_path="/data/{model_name}",
-    callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]),
-    verbose=True,
-    n_threads=multiprocessing.cpu_count() - 1,
-    n_gpu_layers=81)
-llm.invoke("{prompt}")
-EOF
-""",
-                f"python3 {python_file_name}"]
+    cat > {python_file_name} <<EOF
+    from langchain_core.callbacks import CallbackManager, StreamingStdOutCallbackHandler
+    from langchain_community.llms import LlamaCpp
+    import multiprocessing
+    llm = LlamaCpp(
+        model_path="/data/{model_name}",
+        callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]),
+        verbose=True,
+        n_threads=multiprocessing.cpu_count() - 1,
+        n_ctx=5000,
+        n_batch=500,
+        max_tokens={tokens})
+    llm.invoke("{prompt}")
+    EOF
+    """,
+                    f"python3 {python_file_name}"]
             else:
                 langchain_command = [f"""
 cat > {python_file_name} <<EOF
 from langchain_core.callbacks import CallbackManager, StreamingStdOutCallbackHandler
 from langchain_community.llms import LlamaCpp
 import multiprocessing
-llm = LlamaCpp(
-    model_path="/data/{model_name}",
-    callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]),
-    verbose=True,
-    n_threads=multiprocessing.cpu_count() - 1)
+    llm = LlamaCpp(
+        model_path="/data/{model_name}",
+        callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]),
+        verbose=True,
+        n_threads=multiprocessing.cpu_count() - 1,
+        n_gpu_layers=-1,
+        n_ctx=5000,
+        n_batch=500,
+        max_tokens={tokens})
 llm.invoke("{prompt}")
 EOF
 """,
