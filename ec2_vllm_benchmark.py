@@ -2,6 +2,7 @@ import boto3
 import time
 import logging
 from botocore.exceptions import ClientError
+import base64
 
 # Configure logging
 logging.basicConfig(
@@ -128,7 +129,7 @@ runcmd:
         LaunchTemplateName=name,
         VersionDescription='Initial version',
         LaunchTemplateData={
-            'UserData': mime_userdata.encode('utf-8').hex(),
+            'UserData': base64.b64encode(mime_userdata.encode('utf-8')).decode(encoding="utf-8"),
             'SecurityGroupIds': [security_group_id],
             'MetadataOptions': {
                 'HttpTokens': 'required',
@@ -220,7 +221,7 @@ def wait_for_job_queue(batch, queue_arn):
     logger.error(error_msg)
     raise Exception(error_msg)
 
-def get_or_create_compute_environment(batch, name, subnet_ids, security_group_id, launch_template_id):
+def get_or_create_compute_environment(batch, name, subnet_ids, security_group_id, launch_template_id, instance_type):
     try:
         # Check if compute environment exists
         response = batch.describe_compute_environments(computeEnvironments=[name])
@@ -243,11 +244,11 @@ def get_or_create_compute_environment(batch, name, subnet_ids, security_group_id
             'maxvCpus': 256,
             'minvCpus': 0,
             'desiredvCpus': 0,
-            'instanceTypes': ['r8g.4xlarge'],
+            'instanceTypes': [instance_type],
             'subnets': subnet_ids,
             'securityGroupIds': [security_group_id],
             'instanceRole': 'ec2AdminRole',
-            'tags': {'Name': 'Batch-Graviton-Instance'},
+            'tags': {'Name': f'Batch-Graviton-{instance_type}'},
             'allocationStrategy': 'BEST_FIT_PROGRESSIVE',
             'launchTemplate': {
                 'launchTemplateId': launch_template_id,
@@ -289,12 +290,12 @@ def get_or_create_job_queue(batch, name, compute_env_arn):
     wait_for_job_queue(batch, queue_arn)
     return queue_arn
 
-def monitor_job(batch, job_id):
+def monitor_job(batch, job_id, instance_type):
     """Monitor the status of a batch job until it completes or fails."""
     while True:
         response = batch.describe_jobs(jobs=[job_id])
         if not response['jobs']:
-            logger.error(f"Job {job_id} not found")
+            logger.error(f"Job {job_id} ({instance_type}) not found")
             return False
 
         job = response['jobs'][0]
@@ -302,17 +303,53 @@ def monitor_job(batch, job_id):
         reason = job.get('statusReason', 'No reason provided')
         
         if status == 'SUCCEEDED':
-            logger.info(f"Job {job_id} completed successfully")
+            logger.info(f"Job {job_id} ({instance_type}) completed successfully")
             return True
         elif status in ['FAILED', 'CANCELLED']:
-            logger.error(f"Job {job_id} {status.lower()}: {reason}")
+            logger.error(f"Job {job_id} ({instance_type}) {status.lower()}: {reason}")
             # Log container details if available
             if 'container' in job and 'logStreamName' in job['container']:
                 logger.info(f"Log stream: {job['container']['logStreamName']}")
             return False
         
-        logger.info(f"Job {job_id} status: {status}")
+        logger.info(f"Job {job_id} ({instance_type}) status: {status}")
         time.sleep(30)
+
+def monitor_all_jobs(batch, job_ids):
+    """Monitor all jobs concurrently until they complete or fail."""
+    active_jobs = job_ids.copy()
+    results = {}
+
+    while active_jobs:
+        for instance_type, job_id in list(active_jobs.items()):
+            response = batch.describe_jobs(jobs=[job_id])
+            if not response['jobs']:
+                logger.error(f"Job {job_id} ({instance_type}) not found")
+                results[instance_type] = False
+                active_jobs.pop(instance_type)
+                continue
+
+            job = response['jobs'][0]
+            status = job['status']
+            reason = job.get('statusReason', 'No reason provided')
+
+            if status == 'SUCCEEDED':
+                logger.info(f"Job {job_id} ({instance_type}) completed successfully")
+                results[instance_type] = True
+                active_jobs.pop(instance_type)
+            elif status in ['FAILED', 'CANCELLED']:
+                logger.error(f"Job {job_id} ({instance_type}) {status.lower()}: {reason}")
+                if 'container' in job and 'logStreamName' in job['container']:
+                    logger.info(f"Log stream: {job['container']['logStreamName']}")
+                results[instance_type] = False
+                active_jobs.pop(instance_type)
+            else:
+                logger.info(f"Job {job_id} ({instance_type}) status: {status}")
+
+        if active_jobs:
+            time.sleep(30)
+
+    return results
 
 def create_batch_environment():
     batch = boto3.client('batch')
@@ -382,17 +419,30 @@ def create_batch_environment():
             raise
         logger.info("CloudWatch Logs permissions already exist for BatchJobExecutionRole")
 
-    # Get or create compute environment
-    compute_env_arn = get_or_create_compute_environment(
-        batch,
-        'GravitonR8gEnvironment',
-        subnet_ids,
-        security_group_id,
-        launch_template_id
-    )
+    # Instance types and their environments
+    instance_configs = [
+        ('r8g.4xlarge', 'GravitonR8gEnvironment', 'GravitonR8gQueue'),
+        ('c8g.4xlarge', 'GravitonC8gEnvironment', 'GravitonC8gQueue'),
+        ('m8g.4xlarge', 'GravitonM8gEnvironment', 'GravitonM8gQueue')
+    ]
 
-    # Get or create job queue
-    queue_arn = get_or_create_job_queue(batch, 'GravitonR8gQueue', compute_env_arn)
+    compute_envs = {}
+    job_queues = {}
+
+    # Create compute environments and job queues for each instance type
+    for instance_type, env_name, queue_name in instance_configs:
+        compute_env_arn = get_or_create_compute_environment(
+            batch,
+            env_name,
+            subnet_ids,
+            security_group_id,
+            launch_template_id,
+            instance_type
+        )
+        compute_envs[instance_type] = compute_env_arn
+
+        queue_arn = get_or_create_job_queue(batch, queue_name, compute_env_arn)
+        job_queues[instance_type] = queue_arn
 
     # Create CloudWatch log group if it doesn't exist
     logs_client = boto3.client('logs')
@@ -441,8 +491,8 @@ def create_batch_environment():
     )
 
     return {
-        'compute_environment': compute_env_arn,
-        'job_queue': queue_arn,
+        'compute_environments': compute_envs,
+        'job_queues': job_queues,
         'job_definition': job_def_response['jobDefinitionArn'],
         'file_system_id': file_system_id,
         'launch_template_id': launch_template_id
@@ -451,7 +501,7 @@ def create_batch_environment():
 def submit_batch_job(job_queue, job_definition,
                      MODEL='deepseek-ai/DeepSeek-R1-Distill-Qwen-14B',
                      VLLM_CPU_KVCACHE_SPACE=20,
-                     VLLM_CPU_OMP_THREADS_BIND="0-5"):
+                     VLLM_CPU_OMP_THREADS_BIND="all"):
     batch = boto3.client('batch')
     
     try:
@@ -485,9 +535,6 @@ def submit_batch_job(job_queue, job_definition,
         )
         job_id = response['jobId']
         logger.info(f"Successfully submitted job with ID: {job_id}")
-        
-        # Monitor the job until completion
-        monitor_job(batch, job_id)
         return job_id
         
     except ClientError as e:
@@ -501,13 +548,32 @@ if __name__ == '__main__':
     
     logger.info("\nCreated/Found resources:")
     for key, value in resources.items():
-        logger.info(f"{key}: {value}")
+        if isinstance(value, dict):
+            logger.info(f"{key}:")
+            for k, v in value.items():
+                logger.info(f"  {k}: {v}")
+        else:
+            logger.info(f"{key}: {value}")
     
-    # Submit a test job
-    logger.info("\nSubmitting test job...")
-    job_id = submit_batch_job(resources['job_queue'], resources['job_definition'],
-                MODEL="deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
-                VLLM_CPU_KVCACHE_SPACE="20",
-                VLLM_CPU_OMP_THREADS_BIND="0-5"
-            )
-    logger.info(f"Submitted job ID: {job_id}")
+    # Submit test jobs to all queues concurrently
+    logger.info("\nSubmitting test jobs to all queues...")
+    job_ids = {}
+    for instance_type, queue_arn in resources['job_queues'].items():
+        logger.info(f"\nSubmitting job to {instance_type} queue...")
+        job_id = submit_batch_job(
+            queue_arn,
+            resources['job_definition'],
+            MODEL="deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+            VLLM_CPU_KVCACHE_SPACE="20"
+        )
+        job_ids[instance_type] = job_id
+        logger.info(f"Submitted job ID for {instance_type}: {job_id}")
+
+    # Monitor all jobs concurrently
+    logger.info("\nMonitoring all jobs...")
+    results = monitor_all_jobs(boto3.client('batch'), job_ids)
+    
+    # Print final results
+    logger.info("\nFinal results:")
+    for instance_type, success in results.items():
+        logger.info(f"{instance_type}: {'Succeeded' if success else 'Failed'}")
