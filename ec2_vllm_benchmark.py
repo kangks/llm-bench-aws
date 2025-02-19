@@ -413,6 +413,7 @@ def create_batch_environment():
             'vcpus': 2,
             'memory': 64,
             'jobRoleArn': f"arn:aws:iam::{boto3.client('sts').get_caller_identity()['Account']}:role/BatchJobExecutionRole",
+            'privileged': True,
             'mountPoints': [
                 {
                     'sourceVolume': 'efs',
@@ -447,7 +448,10 @@ def create_batch_environment():
         'launch_template_id': launch_template_id
     }
 
-def submit_batch_job(job_queue, job_definition):
+def submit_batch_job(job_queue, job_definition,
+                     MODEL='deepseek-ai/DeepSeek-R1-Distill-Qwen-14B',
+                     VLLM_CPU_KVCACHE_SPACE=20,
+                     VLLM_CPU_OMP_THREADS_BIND="0-5"):
     batch = boto3.client('batch')
     
     try:
@@ -460,8 +464,16 @@ def submit_batch_job(job_queue, job_definition):
                 'environment': [
                     {
                         'name': 'MODEL',
-                        'value': 'deepseek-ai/DeepSeek-R1-Distill-Qwen-14B'
+                        'value': MODEL
                     },
+                    {
+                        'name': 'VLLM_CPU_KVCACHE_SPACE',
+                        'value': VLLM_CPU_KVCACHE_SPACE
+                    },
+                    {
+                        'name': 'VLLM_CPU_OMP_THREADS_BIND',
+                        'value': VLLM_CPU_OMP_THREADS_BIND
+                    }
                 ],
                 "resourceRequirements":[
                     {
@@ -493,5 +505,9 @@ if __name__ == '__main__':
     
     # Submit a test job
     logger.info("\nSubmitting test job...")
-    job_id = submit_batch_job(resources['job_queue'], resources['job_definition'])
+    job_id = submit_batch_job(resources['job_queue'], resources['job_definition'],
+                MODEL="deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+                VLLM_CPU_KVCACHE_SPACE="20",
+                VLLM_CPU_OMP_THREADS_BIND="0-5"
+            )
     logger.info(f"Submitted job ID: {job_id}")
