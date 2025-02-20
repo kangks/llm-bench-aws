@@ -421,9 +421,9 @@ def create_batch_environment():
 
     # Instance types and their environments
     instance_configs = [
-        ('r8g.4xlarge', 'GravitonR8gEnvironment', 'GravitonR8gQueue'),
-        ('c8g.4xlarge', 'GravitonC8gEnvironment', 'GravitonC8gQueue'),
-        ('m8g.4xlarge', 'GravitonM8gEnvironment', 'GravitonM8gQueue')
+        ('r8g.*', 'GravitonR8gEnvironment', 'GravitonR8gQueue'),
+        ('m8g.*', 'GravitonM8gEnvironment', 'GravitonM8gQueue'),
+        ('c8g.*', 'GravitonC8gEnvironment', 'GravitonC8gQueue'),
     ]
 
     compute_envs = {}
@@ -483,7 +483,7 @@ def create_batch_environment():
                 "logDriver": "awslogs",
                 "options": {
                     "awslogs-group": "awslogs-vllm-batch",
-                    "awslogs-stream-prefix": "vllm-offline-14b"
+                    "awslogs-stream-prefix": "vllm-offline"
                 }
             }
         },
@@ -501,7 +501,8 @@ def create_batch_environment():
 def submit_batch_job(job_queue, job_definition,
                      MODEL='deepseek-ai/DeepSeek-R1-Distill-Qwen-14B',
                      VLLM_CPU_KVCACHE_SPACE=20,
-                     VLLM_CPU_OMP_THREADS_BIND="all"):
+                     VLLM_CPU_OMP_THREADS_BIND="all",
+                     MEMORY="64000"):
     batch = boto3.client('batch')
     
     try:
@@ -528,7 +529,7 @@ def submit_batch_job(job_queue, job_definition,
                 "resourceRequirements":[
                     {
                         'type': 'MEMORY',
-                        'value': '64000'
+                        'value': MEMORY
                     }
                 ]
             }
@@ -558,16 +559,26 @@ if __name__ == '__main__':
     # Submit test jobs to all queues concurrently
     logger.info("\nSubmitting test jobs to all queues...")
     job_ids = {}
-    for instance_type, queue_arn in resources['job_queues'].items():
-        logger.info(f"\nSubmitting job to {instance_type} queue...")
-        job_id = submit_batch_job(
-            queue_arn,
-            resources['job_definition'],
-            MODEL="deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
-            VLLM_CPU_KVCACHE_SPACE="20"
-        )
-        job_ids[instance_type] = job_id
-        logger.info(f"Submitted job ID for {instance_type}: {job_id}")
+
+    model_configs = [
+        ('deepseek-ai/DeepSeek-R1-Distill-Qwen-32B', '20', '128000'),
+        ('deepseek-ai/DeepSeek-R1-Distill-Qwen-14B', '20', '128000'),
+        ('deepseek-ai/DeepSeek-R1-Distill-Llama-8B', '20', '64000'),
+        ('deepseek-ai/DeepSeek-R1-Distill-Qwen-7B', '20', '64000'),
+    ]
+
+    for model, kvspace, memory in model_configs:
+        for instance_type, queue_arn in resources['job_queues'].items():
+            logger.info(f"\nSubmitting job to {instance_type} queue...")
+            job_id = submit_batch_job(
+                queue_arn,
+                resources['job_definition'],
+                MODEL=model,
+                VLLM_CPU_KVCACHE_SPACE=f"{kvspace}",
+                MEMORY=f"{memory}"
+            )
+            job_ids[instance_type] = job_id
+            logger.info(f"Submitted job ID for {instance_type}: {job_id}")
 
     # Monitor all jobs concurrently
     logger.info("\nMonitoring all jobs...")
