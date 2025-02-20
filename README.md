@@ -1,18 +1,162 @@
-# EC2 Llama Benchmark
+# LLM Benchmarking on AWS Graviton
 
-This tool provides a comprehensive solution for benchmarking Large Language Models (LLMs) across different Amazon EC2 instance types. It helps users evaluate and compare the performance, cost-effectiveness, and resource utilization of LLM inference across various AWS compute configurations.
+This repository provides tools for benchmarking Large Language Models (LLMs) on AWS Graviton processors, focusing on common business use cases for batch LLM inference. It includes two main implementations:
 
-## Purpose
+# 1. AWS Batch vLLM Benchmark (ec2_vllm_benchmark.py)
+A production-oriented solution using vLLM and AWS Batch that:
+- Sets up a complete AWS Batch environment for LLM inference
+- Uses EFS for model storage and sharing across instances
+- Supports concurrent execution across different instance types
+- Demonstrates a scalable architecture for batch LLM inference workloads
 
-- **Performance Optimization**: Identify the most efficient EC2 instance types for your specific LLM workloads
-- **Cost Analysis**: Compare price-performance ratios across different instance families
-- **Resource Utilization**: Measure memory usage, CPU/GPU utilization, and throughput
-- **Instance Selection**: Make data-driven decisions for production deployments
-- **Scalability Testing**: Evaluate model performance under different hardware configurations
+Key components:
+- AWS Batch compute environment setup
+- EFS filesystem management for model storage
+- Launch template configuration for instance bootstrapping
+- Job queue and job definition management
+- CloudWatch logging integration
+- Support for multiple Graviton instance families (R8g, M8g, C8g)
 
-This project provides a comprehensive benchmarking solution for LLama models on AWS EC2 instances. The implementation consists of a YAML configuration file and a Python script that handles the complete workflow from model downloading to benchmark execution.
+## AWS Batch vLLM Benchmark Implementation
 
-## Implementation Overview
+### Infrastructure Setup
+
+The vLLM benchmark implementation (`ec2_vllm_benchmark.py`) creates a complete AWS Batch environment with the following components:
+
+1. **EFS Storage**:
+   - Creates or reuses an EFS filesystem for model storage
+   - Sets up mount targets in specified subnets
+   - Configures security groups for NFS access
+
+2. **Launch Template**:
+   - Creates a custom launch template for EC2 instances
+   - Includes user data script for automatic EFS mounting
+   - Configures security and metadata options
+
+3. **IAM Roles and Permissions**:
+   - Sets up AWS Batch service role
+   - Creates execution role for batch jobs
+   - Configures CloudWatch Logs permissions
+
+4. **Compute Environments**:
+   - Creates separate environments for different Graviton instance families:
+     * R8g (memory-optimized)
+     * M8g (general purpose)
+     * C8g (compute-optimized)
+   - Configures auto-scaling with 0-256 vCPUs
+   - Uses BEST_FIT_PROGRESSIVE allocation strategy
+
+5. **Job Queues and Definitions**:
+   - Creates dedicated queues for each instance family
+   - Sets up container-based job definition
+   - Configures EFS volume mounts
+   - Enables CloudWatch logging
+
+### Implementation Flow
+
+The benchmarking process consists of several phases:
+
+1. **Environment Setup** (`create_batch_environment()`):
+   - Initializes AWS clients (Batch, EFS, EC2, IAM)
+   - Creates or reuses infrastructure components
+   - Sets up networking and security configurations
+   - Returns resource ARNs and IDs for job submission
+
+2. **Job Submission** (`submit_batch_job()`):
+   - Configures container environment variables:
+     * MODEL: HuggingFace model identifier
+     * VLLM_CPU_KVCACHE_SPACE: KV cache allocation
+     * VLLM_CPU_OMP_THREADS_BIND: Thread binding strategy
+   - Sets memory requirements
+   - Submits job to specified queue
+
+3. **Job Monitoring** (`monitor_all_jobs()`):
+   - Tracks job status across all queues
+   - Provides real-time status updates
+   - Captures CloudWatch log streams
+   - Returns success/failure results
+
+### Key Components
+
+1. **Resource Management**:
+   ```python
+   def get_or_create_efs(efs, ec2, subnet_ids, security_group_id):
+       # Creates or reuses EFS filesystem
+       # Sets up mount targets in subnets
+       # Returns filesystem ID
+
+   def get_or_create_launch_template(ec2, name, file_system_id, security_group_id):
+       # Creates or reuses launch template
+       # Configures EFS mounting
+       # Returns template ID
+   ```
+
+2. **Compute Environment Setup**:
+   ```python
+   def get_or_create_compute_environment(batch, name, subnet_ids, security_group_id, launch_template_id, instance_type):
+       # Creates or reuses compute environment
+       # Configures instance types and scaling
+       # Returns compute environment ARN
+   ```
+
+3. **Job Queue Management**:
+   ```python
+   def get_or_create_job_queue(batch, name, compute_env_arn):
+       # Creates or reuses job queue
+       # Links to compute environment
+       # Returns queue ARN
+   ```
+
+### Model Configurations
+
+The benchmark supports multiple model configurations:
+```python
+model_configs = [
+    ('deepseek-ai/DeepSeek-R1-Distill-Qwen-32B', '20', '128000'),
+    ('deepseek-ai/DeepSeek-R1-Distill-Qwen-14B', '20', '128000'),
+    ('deepseek-ai/DeepSeek-R1-Distill-Llama-8B', '20', '64000'),
+    ('deepseek-ai/DeepSeek-R1-Distill-Qwen-7B', '20', '64000'),
+]
+```
+
+Each configuration specifies:
+- Model identifier
+- KV cache space allocation
+- Memory requirement (MB)
+
+### Output
+
+| Instance Type | Bedrock Model                             | dtype         | enforce_eager | VLLM_CPU_OMP_THREADS_BIND | VLLM_CPU_KVCACHE_SPACE | s/it    | est. speed input | est. speed output | Expected inference? |
+|---------------|-------------------------------------------|---------------|---------------|---------------------------|------------------------|---------|------------------|-------------------|---------------------|
+| c8g.48xlarge  | deepseek-ai/DeepSeek-R1-Distill-Llama-70B | torch.float16 | TRUE          | all                       | 40                     | 1248.04 | 3.55             | 0.3               | No                  |
+| m8g.24xlarge  | deepseek-ai/DeepSeek-R1-Distill-Llama-70B | torch.float16 | TRUE          | all                       | 40                     | 1043.76 | 4.24             | 0.36              | No                  |
+| c8g.24xlarge  | deepseek-ai/DeepSeek-R1-Distill-Llama-8B  | torch.float16 | TRUE          | all                       | 20                     | 308.87  | 14.33            | 1.03              | No                  |
+| r8g.8xlarge   | deepseek-ai/DeepSeek-R1-Distill-Llama-8B  | torch.float16 | TRUE          | all                       | 20                     | 313.35  | 14.13            | 1.01              | No                  |
+| r8g.12xlarge  | deepseek-ai/DeepSeek-R1-Distill-Qwen-14B  | torch.float16 | TRUE          | all                       | 20                     | 1522.71 | 3.26             | 0.31              | Yes                 |
+| c8g.24xlarge  | deepseek-ai/DeepSeek-R1-Distill-Qwen-32B  | torch.float16 | TRUE          | all                       | 20                     | 552.59  | 8.97             | 0.77              | Yes                 |
+| c8g.24xlarge  | deepseek-ai/DeepSeek-R1-Distill-Qwen-32B  | torch.float16 | TRUE          | all                       | 20                     | 552.92  | 8.97             | 0.77              | Yes                 |
+| r8g.12xlarge  | deepseek-ai/DeepSeek-R1-Distill-Qwen-32B  | torch.float16 | TRUE          | all                       | 20                     | 1504.04 | 3.3              | 0.28              | Yes                 |
+| c8g.24xlarge  | deepseek-ai/DeepSeek-R1-Distill-Qwen-32B  | torch.float16 | TRUE          | all                       | 20                     | 557     | 8.9              | 0.76              | Yes                 |
+| r8g.8xlarge   | deepseek-ai/DeepSeek-R1-Distill-Qwen-32B  | torch.float16 | TRUE          | all                       | 20                     | 1348.47 | 3.68             | 0.32              | Yes                 |
+| m8g.16xlarge  | deepseek-ai/DeepSeek-R1-Distill-Qwen-32B  | torch.float16 | TRUE          | all                       | 20                     | 740.83  | 6.69             | 0.58              | Yes                 |
+| c8g.24xlarge  | deepseek-ai/DeepSeek-R1-Distill-Qwen-7B   | torch.float16 | TRUE          | all                       | 20                     | 311.85  | 15.9             | 0.98              | No                  |
+| r8g.12xlarge  | deepseek-ai/DeepSeek-R1-Distill-Qwen-7B   | torch.float16 | TRUE          | all                       | 20                     | 1428.41 | 3.47             | 0.21              | No                  |
+
+# 2. EC2 Llama Benchmark (ec2_llama_benchmark.py)
+A comprehensive benchmarking solution using llama.cpp that:
+- Downloads and manages LLM models on EBS volumes
+- Provisions EC2 instances for benchmarking
+- Supports both CPU and GPU configurations
+- Executes benchmarks using llama.cpp with configurable parameters
+- Provides detailed performance metrics including load time, token generation speed, and resource utilization
+
+Key components:
+- Model download and storage management
+- Automatic instance provisioning and setup
+- Support for multiple evaluation approaches (langchain, direct llama.cpp)
+- Comprehensive benchmark execution and metrics collection
+
+## EC2 Llama Benchmark Implementation
 
 ### Configuration (benchmark.yaml)
 
@@ -83,9 +227,7 @@ The benchmarking process is implemented in `ec2_llama_benchmark.py` and consists
    - Configurable prompt and token generation settings
    - Performance metrics collection
 
-This Python application provisions an EC2 instance, installs llama-cpp and llmperf, runs benchmarks, and terminates the instance after completion.
-
-## Requirements
+### Requirements
 
 - Python 3.7+
 - AWS credentials configured
@@ -93,7 +235,7 @@ This Python application provisions an EC2 instance, installs llama-cpp and llmpe
   - boto3
   - paramiko
 
-## Usage
+### Usage
 
 The script accepts the following command-line arguments:
 
@@ -145,7 +287,7 @@ The script will:
 - Save results to benchmark_results.txt
 - Terminate the instance
 
-## Configuration
+### Configuration
 
 You can modify the instance type by changing the parameters in main():
 
@@ -153,7 +295,7 @@ You can modify the instance type by changing the parameters in main():
 benchmark = EC2LlamaBenchmark(instance_family="t2", instance_size="medium")
 ```
 
-## Output
+### Output
 
 Benchmark results can be parse from the execution logs, such as using the command `grep -e "instance of type" -e "print_info: file type" -e "llama_perf" <application log>.log`
 
@@ -171,10 +313,8 @@ Benchmark results can be parse from the execution logs, such as using the comman
 | c8g.8xlarge   | IQ4_NL - 4.5 bpw | 269          | 10594.66       | 756.75                          | 1.32              |
 | c8g.8xlarge   | Q4_0             | 483          | 27550.83       | 120.83                          | 8.28              |
 | c8g.8xlarge   | IQ4_NL - 4.5 bpw | 483          | 20834.82       | 91.38                           | 10.94             |
-
 | g6e.2xlarge   | Q4_0             | 269          |  335.40       |  23.95                         | 41.75              |
 | g6e.2xlarge   | IQ4_NL - 4.5 bpw | 269          | 536.62       | 38.26                           | 26.14             |
-
 | g6e.2xlarge   | Q4_0             | 483          | 2272.20        | 9.97                            | 100.35            |
 | g6e.2xlarge   | IQ4_NL - 4.5 bpw | 483          | 2589.51        | 11.35                           | 88.08             |
 
