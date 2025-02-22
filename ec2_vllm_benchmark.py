@@ -2,6 +2,7 @@ import boto3
 import time
 import logging
 from botocore.exceptions import ClientError
+import botocore.session
 import base64
 
 # Configure logging
@@ -414,6 +415,23 @@ def create_batch_environment():
             }'''
         )
         logger.info("Added CloudWatch Logs permissions to BatchJobExecutionRole")
+        iam.put_role_policy(
+            RoleName='BatchJobExecutionRole',
+            PolicyName='S3Policy',
+            PolicyDocument='''{
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": [
+                            "s3:*"
+                        ],
+                        "Resource": "*"
+                    }
+                ]
+            }'''
+        )
+        logger.info("Added CloudWatch Logs permissions to BatchJobExecutionRole")
     except ClientError as e:
         if e.response['Error']['Code'] != 'EntityAlreadyExists':
             raise
@@ -421,9 +439,9 @@ def create_batch_environment():
 
     # Instance types and their environments
     instance_configs = [
-        ('r8g.*', 'GravitonR8gEnvironment', 'GravitonR8gQueue'),
-        ('m8g.*', 'GravitonM8gEnvironment', 'GravitonM8gQueue'),
-        ('c8g.*', 'GravitonC8gEnvironment', 'GravitonC8gQueue'),
+        ('r8g', 'GravitonR8gEnvironment', 'GravitonR8gQueue'),
+        # ('m8g', 'GravitonM8gEnvironment', 'GravitonM8gQueue'),
+        # ('c8g', 'GravitonC8gEnvironment', 'GravitonC8gQueue'),
     ]
 
     compute_envs = {}
@@ -454,12 +472,12 @@ def create_batch_environment():
             raise
         logger.info("Using existing CloudWatch log group: awslogs-vllm-batch")
 
-    # Register job definition
-    job_def_response = batch.register_job_definition(
+    # Register vLLM job definition
+    vllm_job_def_response = batch.register_job_definition(
         jobDefinitionName='vllm-offline-job',
         type='container',
         containerProperties={
-            'image': "654654616949.dkr.ecr.us-east-1.amazonaws.com/vllm/vllm-arm:latest",
+            'image': f"{botocore.session.Session().create_client('sts').get_caller_identity()['Account']}.dkr.ecr.us-east-1.amazonaws.com/vllm/vllm-arm:latest",
             'vcpus': 2,
             'memory': 64,
             'jobRoleArn': f"arn:aws:iam::{boto3.client('sts').get_caller_identity()['Account']}:role/BatchJobExecutionRole",
@@ -478,7 +496,7 @@ def create_batch_environment():
                         "sourcePath": "/mnt/efs/fs1"
                     },
                 }
-            ],            
+            ],
             "logConfiguration": {
                 "logDriver": "awslogs",
                 "options": {
@@ -486,50 +504,93 @@ def create_batch_environment():
                     "awslogs-stream-prefix": "vllm-offline"
                 }
             }
-        },
-        
+        }
+    )
+
+    # Register llama.cpp job definition
+    llama_job_def_response = batch.register_job_definition(
+        jobDefinitionName='llama-offline-job',
+        type='container',
+        containerProperties={
+            'image': f"{botocore.session.Session().create_client('sts').get_caller_identity()['Account']}.dkr.ecr.us-east-1.amazonaws.com/llm-bench/llamacpp/arm:latest",
+            'vcpus': 2,
+            'memory': 64,
+            'jobRoleArn': f"arn:aws:iam::{boto3.client('sts').get_caller_identity()['Account']}:role/BatchJobExecutionRole",
+            'privileged': True,
+            'mountPoints': [
+                {
+                    'sourceVolume': 'efs',
+                    'containerPath': '/mnt/efs/fs1',
+                    'readOnly': False
+                }
+            ],
+            'volumes': [
+                {
+                    'name': 'efs',
+                    "host": {
+                        "sourcePath": "/mnt/efs/fs1"
+                    },
+                }
+            ],
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "awslogs-vllm-batch",
+                    "awslogs-stream-prefix": "llama-offline"
+                }
+            }
+        }
     )
 
     return {
         'compute_environments': compute_envs,
         'job_queues': job_queues,
-        'job_definition': job_def_response['jobDefinitionArn'],
+        'vllm_job_definition': vllm_job_def_response['jobDefinitionArn'],
+        'llama_job_definition': llama_job_def_response['jobDefinitionArn'],
         'file_system_id': file_system_id,
         'launch_template_id': launch_template_id
     }
 
-def submit_batch_job(job_queue, job_definition,
-                     MODEL='deepseek-ai/DeepSeek-R1-Distill-Qwen-14B',
-                     VLLM_CPU_KVCACHE_SPACE=20,
-                     VLLM_CPU_OMP_THREADS_BIND="all",
-                     MEMORY="64000"):
+def submit_batch_job(job_queue,
+                      job_definition,
+                      MODEL='deepseek-ai/DeepSeek-R1-Distill-Qwen-14B',
+                      MEMORY="64000",
+                      VLLM_CPU_KVCACHE_SPACE=None,
+                      VLLM_CPU_OMP_THREADS_BIND=None):
     batch = boto3.client('batch')
     
+    job_name = f"""{job_queue.split("/")[1]}_{MODEL}"""
+    job_name = job_name.translate ({ord(c): "_" for c in "!@#$%^&*()[]{};:,./<>?\|`~-=_+"})
+    print(f"job_name={job_name}")
+
     try:
         logger.info(f"Submitting job to queue: {job_queue}")
+        
+        # Base environment variables
+        env_vars = [{'name': 'MODEL', 'value': MODEL}]
+        
+        # Add vLLM-specific environment variables if provided
+        if VLLM_CPU_KVCACHE_SPACE is not None:
+            env_vars.append({
+                'name': 'VLLM_CPU_KVCACHE_SPACE',
+                'value': str(VLLM_CPU_KVCACHE_SPACE)
+            })
+        if VLLM_CPU_OMP_THREADS_BIND is not None:
+            env_vars.append({
+                'name': 'VLLM_CPU_OMP_THREADS_BIND',
+                'value': VLLM_CPU_OMP_THREADS_BIND
+            })
+            
         response = batch.submit_job(
-            jobName='vllm-offline-test',
+            jobName=job_name,
             jobQueue=job_queue,
             jobDefinition=job_definition,
             containerOverrides={
-                'environment': [
-                    {
-                        'name': 'MODEL',
-                        'value': MODEL
-                    },
-                    {
-                        'name': 'VLLM_CPU_KVCACHE_SPACE',
-                        'value': VLLM_CPU_KVCACHE_SPACE
-                    },
-                    {
-                        'name': 'VLLM_CPU_OMP_THREADS_BIND',
-                        'value': VLLM_CPU_OMP_THREADS_BIND
-                    }
-                ],
+                'environment': env_vars,
                 "resourceRequirements":[
                     {
                         'type': 'MEMORY',
-                        'value': MEMORY
+                        'value': str(MEMORY)
                     }
                 ]
             }
@@ -561,21 +622,31 @@ if __name__ == '__main__':
     job_ids = {}
 
     model_configs = [
-        ('deepseek-ai/DeepSeek-R1-Distill-Qwen-32B', '20', '128000'),
-        ('deepseek-ai/DeepSeek-R1-Distill-Qwen-14B', '20', '128000'),
-        ('deepseek-ai/DeepSeek-R1-Distill-Llama-8B', '20', '64000'),
-        ('deepseek-ai/DeepSeek-R1-Distill-Qwen-7B', '20', '64000'),
+        # Format: (model_path, is_gguf, memory, kvspace)
+        # ('deepseek-ai/DeepSeek-R1-Distill-Llama-70B', False, '256000', '40'),
+        # ('bartowski/DeepSeek-R1-Distill-Llama-70B-GGUF', True, '256000', '40'),
+        # ('/mnt/efs/fs1/vllm/cache/bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF/DeepSeek-R1-Distill-Qwen-32B-Q8_0.gguf', True, '256000', '40'),
+        ('bartowski/DeepSeek-R1-Distill-Llama-70B-GGUF/DeepSeek-R1-Distill-Llama-70B-Q4_0.gguf', True, '256000', '40'),
+        ('bartowski/DeepSeek-R1-Distill-Llama-70B-GGUF/DeepSeek-R1-Distill-Llama-70B-Q4_0.gguf', True, '256000', '40'),
+        # ('deepseek-ai/DeepSeek-R1-Distill-Qwen-32B', False, '128000', '20'),
+        # ('deepseek-ai/DeepSeek-R1-Distill-Llama-8B', False, '64000', '20'),
+        # ('deepseek-ai/DeepSeek-R1-Distill-Qwen-7B', False, '64000', '20'),
     ]
 
-    for model, kvspace, memory in model_configs:
+    for model, is_gguf, memory, kvspace in model_configs:
         for instance_type, queue_arn in resources['job_queues'].items():
             logger.info(f"\nSubmitting job to {instance_type} queue...")
+            # Choose job definition based on whether the model is GGUF format
+            job_definition = resources['llama_job_definition'] if is_gguf else resources['vllm_job_definition']
+            
+            # Only pass vLLM-specific parameters for vLLM jobs
             job_id = submit_batch_job(
                 queue_arn,
-                resources['job_definition'],
+                job_definition,
                 MODEL=model,
-                VLLM_CPU_KVCACHE_SPACE=f"{kvspace}",
-                MEMORY=f"{memory}"
+                MEMORY=memory,
+                VLLM_CPU_KVCACHE_SPACE=kvspace if not is_gguf else None,
+                VLLM_CPU_OMP_THREADS_BIND="all" if not is_gguf else None
             )
             job_ids[instance_type] = job_id
             logger.info(f"Submitted job ID for {instance_type}: {job_id}")

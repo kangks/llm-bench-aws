@@ -1,0 +1,19 @@
+FROM python:3-slim-bookworm
+
+RUN apt update && apt install -y libopenblas-dev ninja-build build-essential pkg-config git
+
+RUN python3 -m pip install --upgrade pip pytest cmake scikit-build setuptools fastapi uvicorn sse-starlette pydantic-settings starlette-context
+
+# RUN apt-get install -y --no-install-recommends libopenblas-dev && \
+#     CMAKE_ARGS="-DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS" pip install llama-cpp-python --verbose; \
+
+# RUN CMAKE_ARGS="-DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS" \
+#   pip install llama-cpp-python --upgrade --force-reinstall --no-cache-dir
+
+RUN CMAKE_ARGS="-DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS" \
+  pip install llama-cpp-python --upgrade --force-reinstall --no-cache-dir
+
+  RUN pip install --upgrade botocore boto3 huggingface-hub
+
+COPY offline-llamacpp.py .
+ENTRYPOINT [ "python3",  "offline-llamacpp.py"]
