@@ -553,33 +553,20 @@ def create_batch_environment():
 
 def submit_batch_job(job_queue,
                       job_definition,
-                      MODEL='deepseek-ai/DeepSeek-R1-Distill-Qwen-14B',
-                      MEMORY="64000",
-                      VLLM_CPU_KVCACHE_SPACE=None,
-                      VLLM_CPU_OMP_THREADS_BIND=None):
+                      model='deepseek-ai/DeepSeek-R1-Distill-Qwen-14B',
+                      memory="64000",
+                      job_env_vars=[]):
     batch = boto3.client('batch')
     
-    job_name = f"""{job_queue.split("/")[1]}_{MODEL}"""
+    job_name = f"""{job_queue.split("/")[1]}_{model}"""
     job_name = job_name.translate ({ord(c): "_" for c in "!@#$%^&*()[]{};:,./<>?\|`~-=_+"})
-    print(f"job_name={job_name}")
 
     try:
         logger.info(f"Submitting job to queue: {job_queue}")
         
         # Base environment variables
-        env_vars = [{'name': 'MODEL', 'value': MODEL}]
-        
-        # Add vLLM-specific environment variables if provided
-        if VLLM_CPU_KVCACHE_SPACE is not None:
-            env_vars.append({
-                'name': 'VLLM_CPU_KVCACHE_SPACE',
-                'value': str(VLLM_CPU_KVCACHE_SPACE)
-            })
-        if VLLM_CPU_OMP_THREADS_BIND is not None:
-            env_vars.append({
-                'name': 'VLLM_CPU_OMP_THREADS_BIND',
-                'value': VLLM_CPU_OMP_THREADS_BIND
-            })
+        env_vars = [{'name': 'MODEL', 'value': model}]
+        env_vars += job_env_vars
             
         response = batch.submit_job(
             jobName=job_name,
@@ -590,7 +577,7 @@ def submit_batch_job(job_queue,
                 "resourceRequirements":[
                     {
                         'type': 'MEMORY',
-                        'value': str(MEMORY)
+                        'value': str(memory)
                     }
                 ]
             }
@@ -622,31 +609,50 @@ if __name__ == '__main__':
     job_ids = {}
 
     model_configs = [
-        # Format: (model_path, is_gguf, memory, kvspace)
-        # ('deepseek-ai/DeepSeek-R1-Distill-Llama-70B', False, '256000', '40'),
-        # ('bartowski/DeepSeek-R1-Distill-Llama-70B-GGUF', True, '256000', '40'),
-        # ('/mnt/efs/fs1/vllm/cache/bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF/DeepSeek-R1-Distill-Qwen-32B-Q8_0.gguf', True, '256000', '40'),
-        ('bartowski/DeepSeek-R1-Distill-Llama-70B-GGUF/DeepSeek-R1-Distill-Llama-70B-Q4_0.gguf', True, '256000', '40'),
-        ('bartowski/DeepSeek-R1-Distill-Llama-70B-GGUF/DeepSeek-R1-Distill-Llama-70B-Q4_0.gguf', True, '256000', '40'),
-        # ('deepseek-ai/DeepSeek-R1-Distill-Qwen-32B', False, '128000', '20'),
-        # ('deepseek-ai/DeepSeek-R1-Distill-Llama-8B', False, '64000', '20'),
-        # ('deepseek-ai/DeepSeek-R1-Distill-Qwen-7B', False, '64000', '20'),
+        # Format: (model_path, inference_framework, memory, env_vars)
+        ('deepseek-ai/DeepSeek-R1-Distill-Llama-70B', "vllm", '256000', [
+            {'name':'S3_SYSTEM_PROMPT','value':'s3://654654616949-ue1-mlmodels/llm-bench/system_prompts.txt'},
+            {'name':'S3_USER_PROMPT','value':'s3://654654616949-ue1-mlmodels/llm-bench/inputs.json'},
+            {'name':'VLLM_CPU_KVCACHE_SPACE','value':'40'},
+            {'name':'VLLM_SAMPLING_TOP_P','value':"0.9"},
+            {'name':'VLLM_SAMPLING_TEMPERATURE','value':"0"},
+        ]),
+        ('bartowski/DeepSeek-R1-Distill-Llama-70B-GGUF', "llama.cpp", '256000', [
+            {'name':'S3_SYSTEM_PROMPT','value':'s3://654654616949-ue1-mlmodels/llm-bench/system_prompts.txt'},
+            {'name':'S3_USER_PROMPT','value':'s3://654654616949-ue1-mlmodels/llm-bench/inputs.json'},
+            {'name':'LLAMA_TOP_P','value':"0.9"},
+            {'name':'LLAMA_TEMPERATURE','value':"0"},
+        ]),
+        # ('/mnt/efs/fs1/vllm/cache/bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF/DeepSeek-R1-Distill-Qwen-32B-Q8_0.gguf', "llama.cpp", '256000', '40'),
+        # ('deepseek-ai/DeepSeek-R1-Distill-Llama-8B', "vllm", '64000', '20'),
+        # ('deepseek-ai/DeepSeek-R1-Distill-Qwen-7B', "vllm", '64000', '20'),
+        # ('bartowski/DeepSeek-R1-Distill-Llama-70B-GGUF/DeepSeek-R1-Distill-Llama-70B-Q4_0.gguf', "llama.cpp", '256000', [{'name':'VLLM_CPU_KVCACHE_SPACE','value':'20'},{'name':'VLLM_CPU_OMP_THREADS_BIND','value':'30'}]),
+        # ('deepseek-ai/DeepSeek-R1-Distill-Qwen-32B', "vllm", '128000', [
+        #     {'name':'S3_SYSTEM_PROMPT','value':'s3://654654616949-ue1-mlmodels/llm-bench/system_prompts.txt'},
+        #     {'name':'S3_USER_PROMPT','value':'s3://654654616949-ue1-mlmodels/llm-bench/inputs.json'},
+        #     {'name':'VLLM_CPU_KVCACHE_SPACE','value':'40'}
+        # ]),
     ]
 
-    for model, is_gguf, memory, kvspace in model_configs:
+    for model, inference_framwork, memory, job_env_vars in model_configs:
         for instance_type, queue_arn in resources['job_queues'].items():
             logger.info(f"\nSubmitting job to {instance_type} queue...")
             # Choose job definition based on whether the model is GGUF format
-            job_definition = resources['llama_job_definition'] if is_gguf else resources['vllm_job_definition']
+            match inference_framwork:
+                case  "vllm":
+                    job_definition = resources['vllm_job_definition']
+                case "llama.cpp":
+                    job_definition = resources['llama_job_definition']
+                case _:
+                    raise Exception(f"Invalud inference framework {inference_framwork}")
             
             # Only pass vLLM-specific parameters for vLLM jobs
             job_id = submit_batch_job(
                 queue_arn,
                 job_definition,
-                MODEL=model,
-                MEMORY=memory,
-                VLLM_CPU_KVCACHE_SPACE=kvspace if not is_gguf else None,
-                VLLM_CPU_OMP_THREADS_BIND="all" if not is_gguf else None
+                model=model,
+                memory=memory,
+                job_env_vars=job_env_vars
             )
             job_ids[instance_type] = job_id
             logger.info(f"Submitted job ID for {instance_type}: {job_id}")

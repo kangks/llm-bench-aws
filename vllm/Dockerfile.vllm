@@ -1,4 +1,4 @@
 FROM vllm/vllm-arm
-RUN pip install --upgrade botocore 
+RUN pip install --upgrade botocore boto3
 COPY offline-vllm.py .
 ENTRYPOINT [ "python3",  "offline-vllm.py"]

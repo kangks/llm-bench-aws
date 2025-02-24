@@ -29,8 +29,8 @@ os.environ['HF_HOME']=os.getenv("HF_HOME","/mnt/efs/fs1/vllm/cache")
 os.environ['HF_DATASETS_CACHE']=os.getenv("HF_DATASETS_CACHE", "/mnt/efs/fs1/vllm/cache")
 
 model = os.getenv("MODEL", "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B")
-VLLM_SAMPLING_TEMPERATURE=int(os.getenv("VLLM_SAMPLING_TEMPERATURE", "0"))
-VLLM_TOP_P=int(os.getenv("VLLM_SAMPLING_TOP_P", "0.9"))
+VLLM_SAMPLING_TEMPERATURE=float(os.getenv("VLLM_SAMPLING_TEMPERATURE", "0"))
+VLLM_TOP_P=float(os.getenv("VLLM_SAMPLING_TOP_P", "0.9"))
 
 max_cpu=max(0,cpuinfo.get_cpu_info()["count"]-2)
 os.environ['VLLM_CPU_OMP_THREADS_BIND']=os.getenv("VLLM_CPU_OMP_THREADS_BIND", f"{max_cpu}")

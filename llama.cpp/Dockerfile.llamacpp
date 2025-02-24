@@ -13,7 +13,7 @@ RUN python3 -m pip install --upgrade pip pytest cmake scikit-build setuptools fa
 RUN CMAKE_ARGS="-DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS" \
   pip install llama-cpp-python --upgrade --force-reinstall --no-cache-dir
 
-  RUN pip install --upgrade botocore boto3 huggingface-hub
+RUN pip install --upgrade botocore boto3 huggingface-hub
 
 COPY offline-llamacpp.py .
 ENTRYPOINT [ "python3",  "offline-llamacpp.py"]

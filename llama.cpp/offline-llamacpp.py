@@ -3,17 +3,30 @@ import multiprocessing
 import boto3
 import json
 import os
+import logging
 
 LOCAL_DIR=os.getenv("HF_HOME","/mnt/efs/fs1/vllm/cache")
 MODEL = os.getenv("MODEL")
-n_ctx=os.getenv("LLAMA_N_CTX", 10000)
-n_batch=os.getenv("LLAMA_N_BATCH", 5000)
+n_ctx=int(os.getenv("LLAMA_N_CTX", "10000"))
+n_batch=int(os.getenv("LLAMA_N_BATCH", "5000"))
+top_p=float(os.getenv("LLAMA_TOP_P", "0.9"))
+temperature=float(os.getenv("LLAMA_TEMPERATURE", "0"))
 
 S3_SYSTEM_PROMPT=os.getenv("S3_SYSTEM_PROMPT")
 S3_USER_PROMPT=os.getenv("S3_USER_PROMPT")
 
 repo_id=MODEL.rsplit('/',1)[0]
 filename=MODEL.rsplit('/',1)[1]
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.FileHandler(f'llama_benchmark_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'),
+        logging.StreamHandler()
+    ]
+)
 
 def read_from_s3(bucket, key):
     s3 = boto3.client('s3')
@@ -30,10 +43,12 @@ def parse_s3_path(s3_path):
 
 # Initialize the model
 llm = Llama.from_pretrained(
-    repo_id="bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF",
-    filename="DeepSeek-R1-Distill-Qwen-32B-Q8_0.gguf",
+    repo_id=repo_id,
+    filename=filename,
     local_dir=LOCAL_DIR,
     verbose=True,
+    temperature=temperature,
+    top_p=top_p,
     n_threads=multiprocessing.cpu_count() - 2,
     n_threads_batch=multiprocessing.cpu_count() - 2,
     n_ctx=n_ctx,
@@ -62,16 +77,19 @@ t = time.process_time()
 response = llm.create_chat_completion(messages)
 elapsed_time = time.process_time() - t
 
-print(response)
+logging.info(response)
 
 try:
     from botocore.utils import IMDSFetcher
     instance_type = IMDSFetcher()._get_request("/latest/meta-data/instance-type", None, token=IMDSFetcher()._fetch_metadata_token()).text.strip()    
-    print(f"""instance_type: {instance_type}, 
-          model: {os.environ['MODEL']}, 
-          elapsed_time: {elapsed_time},
-          VLLM_CPU_KVCACHE_SPACE: {os.environ['VLLM_CPU_KVCACHE_SPACE']}, 
-          VLLM_CPU_OMP_THREADS_BIND: {os.environ['VLLM_CPU_OMP_THREADS_BIND']},
-          response: {response}""")
-except:
-    pass
+    logging.info(f"""instance_type: {instance_type}, 
+        model: {os.environ['MODEL']}, 
+        elapsed_time: {elapsed_time},
+        response: {response},
+        n_ctx: {n_ctx},
+        n_batch: {n_batch},
+        top_p: {top_p},
+        temperature: {temperature}
+""")
+except Exception as e:
+    logging.exception(e)
