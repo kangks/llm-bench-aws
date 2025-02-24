@@ -33,9 +33,10 @@ model_revision=os.getenv("MODEL_REVISION","latest")
 VLLM_SAMPLING_TEMPERATURE=float(os.getenv("VLLM_SAMPLING_TEMPERATURE", "0"))
 VLLM_TOP_P=float(os.getenv("VLLM_SAMPLING_TOP_P", "0.9"))
 
-# max_cpu=max(0,cpuinfo.get_cpu_info()["count"]-2)
-max_cpu=max(0,os.cpu_count()-2)
-os.environ['VLLM_CPU_OMP_THREADS_BIND']=os.getenv("VLLM_CPU_OMP_THREADS_BIND", f"{max_cpu}")
+max_cpu=max(0,cpuinfo.get_cpu_info()["count"]-2)
+# max_cpu=max(0,os.cpu_count()-2)
+
+os.environ['VLLM_CPU_OMP_THREADS_BIND']=os.getenv("VLLM_CPU_OMP_THREADS_BIND", f"0-{max_cpu}")
 
 S3_SYSTEM_PROMPT=os.getenv("S3_SYSTEM_PROMPT")
 S3_USER_PROMPT=os.getenv("S3_USER_PROMPT")
@@ -51,7 +52,7 @@ logging.basicConfig(
 )
 
 logging.info(f"getting model {model} from {os.environ['HF_HOME']}")
-os.system(f"ls -l {os.environ['HF_HOME']}")
+logging.info(f"VLLM_CPU_OMP_THREADS_BIND: {os.environ['VLLM_CPU_OMP_THREADS_BIND']}")
 
 tokenizer = None
 max_model_len=10000
