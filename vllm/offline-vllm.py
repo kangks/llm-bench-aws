@@ -29,17 +29,19 @@ os.environ['HF_HOME']=os.getenv("HF_HOME","/mnt/efs/fs1/vllm/cache")
 os.environ['HF_DATASETS_CACHE']=os.getenv("HF_DATASETS_CACHE", "/mnt/efs/fs1/vllm/cache")
 
 model = os.getenv("MODEL", "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B")
+model_revision=os.getenv("MODEL_REVISION","latest")
 VLLM_SAMPLING_TEMPERATURE=float(os.getenv("VLLM_SAMPLING_TEMPERATURE", "0"))
 VLLM_TOP_P=float(os.getenv("VLLM_SAMPLING_TOP_P", "0.9"))
 
-max_cpu=max(0,cpuinfo.get_cpu_info()["count"]-2)
+# max_cpu=max(0,cpuinfo.get_cpu_info()["count"]-2)
+max_cpu=max(0,os.cpu_count()-2)
 os.environ['VLLM_CPU_OMP_THREADS_BIND']=os.getenv("VLLM_CPU_OMP_THREADS_BIND", f"{max_cpu}")
 
 S3_SYSTEM_PROMPT=os.getenv("S3_SYSTEM_PROMPT")
 S3_USER_PROMPT=os.getenv("S3_USER_PROMPT")
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
     handlers=[
@@ -47,6 +49,9 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+
+logging.info(f"getting model {model} from {os.environ['HF_HOME']}")
+os.system(f"ls -l {os.environ['HF_HOME']}")
 
 tokenizer = None
 max_model_len=10000
@@ -61,13 +66,15 @@ sampling_params = SamplingParams(
     max_tokens=max_tokens)
 llm = LLM(
     model=model,
+    revision=model_revision,
     max_model_len=max_model_len,
     trust_remote_code=True,
     tokenizer=tokenizer,
     dtype="half",
     swap_space=3,
     enforce_eager=True,
-    enable_prefix_caching=enable_prefix_caching
+    enable_prefix_caching=enable_prefix_caching,
+    download_dir=os.environ['HF_HOME']
 )
 
 # Parse S3 paths
@@ -108,6 +115,6 @@ try:
           VLLM_CPU_OMP_THREADS_BIND: {os.environ['VLLM_CPU_OMP_THREADS_BIND']},
           VLLM_SAMPLING_TEMPERATURE: {VLLM_SAMPLING_TEMPERATURE},
           VLLM_TOP_P: {VLLM_TOP_P}
-""")
+    """)
 except:
     pass
