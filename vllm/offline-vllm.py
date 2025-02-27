@@ -92,6 +92,8 @@ messages = [
     {"role": "user", "content": user_content}
 ]
 
+logging.info(f"messages:{messages}")
+
 import time
 t = time.process_time()
 # llm.start_profile()
@@ -99,7 +101,6 @@ outputs = llm.chat(messages,
     sampling_params=sampling_params)
 # llm.stop_profile()
 elapsed_time = time.process_time() - t
-prompt_words=len(messages[0].split()+messages[1].split())
 
 for output in outputs:
     prompt = output.prompt
@@ -111,7 +112,6 @@ try:
     instance_type = IMDSFetcher()._get_request("/latest/meta-data/instance-type", None, token=IMDSFetcher()._fetch_metadata_token()).text.strip()    
     print(f"""instance_type: {instance_type}, model: {os.environ['MODEL']}, 
           elapsed_time: {elapsed_time},
-          prompt_words: {prompt_words},
           VLLM_CPU_KVCACHE_SPACE: {os.environ['VLLM_CPU_KVCACHE_SPACE']}, 
           VLLM_CPU_OMP_THREADS_BIND: {os.environ['VLLM_CPU_OMP_THREADS_BIND']},
           VLLM_SAMPLING_TEMPERATURE: {VLLM_SAMPLING_TEMPERATURE},
