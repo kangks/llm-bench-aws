@@ -131,6 +131,9 @@ runcmd:
         VersionDescription='Initial version',
         LaunchTemplateData={
             'UserData': base64.b64encode(mime_userdata.encode('utf-8')).decode(encoding="utf-8"),
+            'Monitoring':{
+                "Enabled": True
+            },
             'SecurityGroupIds': [security_group_id],
             'MetadataOptions': {
                 'HttpTokens': 'required',
@@ -440,8 +443,8 @@ def create_batch_environment():
     # Instance types and their environments
     instance_configs = [
         ('r8g', 'GravitonR8gEnvironment', 'GravitonR8gQueue'),
-        # ('m8g', 'GravitonM8gEnvironment', 'GravitonM8gQueue'),
-        # ('c8g', 'GravitonC8gEnvironment', 'GravitonC8gQueue'),
+        ('m8g', 'GravitonM8gEnvironment', 'GravitonM8gQueue'),
+        ('c8g', 'GravitonC8gEnvironment', 'GravitonC8gQueue'),
     ]
 
     compute_envs = {}
@@ -610,19 +613,38 @@ if __name__ == '__main__':
 
     model_configs = [
         # Format: (model_path, inference_framework, memory, env_vars)
-        ('deepseek-ai/DeepSeek-R1-Distill-Llama-70B', "vllm", '256000', [
-            {'name':'S3_SYSTEM_PROMPT','value':'s3://654654616949-ue1-mlmodels/llm-bench/system_prompts.txt'},
-            {'name':'S3_USER_PROMPT','value':'s3://654654616949-ue1-mlmodels/llm-bench/inputs.json'},
+        # ('deepseek-ai/DeepSeek-R1-Distill-Llama-70B', "vllm", '256000', [
+        #     {'name':'S3_SYSTEM_PROMPT','value':'s3://654654616949-ue1-mlmodels/llm-bench/system_prompts.txt'},
+        #     {'name':'S3_USER_PROMPT','value':'s3://654654616949-ue1-mlmodels/llm-bench/inputs.json'},
+        #     {'name':'MODEL_REVISION','value':'288e64a6ddb4467a0d802b2a3ea00e2888e5eb84'},
+        #     {'name':'VLLM_CPU_KVCACHE_SPACE','value':'80'},
+        #     {'name':'VLLM_SAMPLING_TOP_P','value':"0.9"},
+        #     {'name':'VLLM_SAMPLING_TEMPERATURE','value':"0"},
+        # ]),
+        ('deepseek-ai/DeepSeek-R1-Distill-Qwen-32B', "vllm", '64000', [
+            {'name':'S3_USER_PROMPT','value':'s3://654654616949-ue1-mlmodels/llm-bench/reasoning_prompt1.txt,s3://654654616949-ue1-mlmodels/llm-bench/reasoning_prompt2.txt,s3://654654616949-ue1-mlmodels/llm-bench/reasoning_prompt3.txt,s3://654654616949-ue1-mlmodels/llm-bench/reasoning_prompt4.txt,s3://654654616949-ue1-mlmodels/llm-bench/reasoning_prompt5.txt'},
+            {'name':'MODEL_REVISION','value':'3865e12a1eb7cbd641ab3f9dfc28c588c6b0c1e9'},
             {'name':'VLLM_CPU_KVCACHE_SPACE','value':'40'},
             {'name':'VLLM_SAMPLING_TOP_P','value':"0.9"},
             {'name':'VLLM_SAMPLING_TEMPERATURE','value':"0"},
+            {'name':'use_llmclass','value':'false'}
         ]),
-        ('bartowski/DeepSeek-R1-Distill-Llama-70B-GGUF', "llama.cpp", '256000', [
-            {'name':'S3_SYSTEM_PROMPT','value':'s3://654654616949-ue1-mlmodels/llm-bench/system_prompts.txt'},
-            {'name':'S3_USER_PROMPT','value':'s3://654654616949-ue1-mlmodels/llm-bench/inputs.json'},
-            {'name':'LLAMA_TOP_P','value':"0.9"},
-            {'name':'LLAMA_TEMPERATURE','value':"0"},
+        ('deepseek-ai/DeepSeek-R1-Distill-Qwen-32B', "vllm", '64000', [
+            {'name':'S3_USER_PROMPT','value':'s3://654654616949-ue1-mlmodels/llm-bench/reasoning_prompt1.txt,s3://654654616949-ue1-mlmodels/llm-bench/reasoning_prompt2.txt,s3://654654616949-ue1-mlmodels/llm-bench/reasoning_prompt3.txt,s3://654654616949-ue1-mlmodels/llm-bench/reasoning_prompt4.txt,s3://654654616949-ue1-mlmodels/llm-bench/reasoning_prompt5.txt'},
+            {'name':'MODEL_REVISION','value':'3865e12a1eb7cbd641ab3f9dfc28c588c6b0c1e9'},
+            {'name':'VLLM_CPU_KVCACHE_SPACE','value':'40'},
+            {'name':'VLLM_SAMPLING_TOP_P','value':"0.9"},
+            {'name':'VLLM_SAMPLING_TEMPERATURE','value':"0"},
+            {'name':'use_llmclass','value':'true'}
         ]),
+        # ('bartowski/DeepSeek-R1-Distill-Llama-70B-GGUF/DeepSeek-R1-Distill-Llama-70B-Q4_0.gguf', "llama.cpp", '256000', [
+        #     {'name':'S3_SYSTEM_PROMPT','value':'s3://654654616949-ue1-mlmodels/llm-bench/system_prompts.txt'},
+        #     {'name':'S3_USER_PROMPT','value':'s3://654654616949-ue1-mlmodels/llm-bench/inputs.json'},
+        #     {'name':'LLAMA_N_CTX','value':"15000"},
+        #     {'name':'LLAMA_N_BATCH','value':"1000"},
+        #     {'name':'LLAMA_TOP_P','value':"0.9"},
+        #     {'name':'LLAMA_TEMPERATURE','value':"0"},
+        # ]),
         # ('/mnt/efs/fs1/vllm/cache/bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF/DeepSeek-R1-Distill-Qwen-32B-Q8_0.gguf', "llama.cpp", '256000', '40'),
         # ('deepseek-ai/DeepSeek-R1-Distill-Llama-8B', "vllm", '64000', '20'),
         # ('deepseek-ai/DeepSeek-R1-Distill-Qwen-7B', "vllm", '64000', '20'),
