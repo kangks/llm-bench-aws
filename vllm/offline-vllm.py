@@ -6,19 +6,36 @@ for loading prompts from S3 and configurable model parameters.
 """
 
 import os
+import cpuinfo
+
+# Set up environment variables before any VLLM imports
+max_cpu = max(0, cpuinfo.get_cpu_info()["count"] - 2)
+env_vars = {
+    'VLLM_LOGGING_LEVEL': 'DEBUG',
+    'VLLM_CPU_KVCACHE_SPACE': '20',
+    'TRANSFORMERS_CACHE': '/mnt/efs/fs1/vllm/cache',
+    'HF_HOME': '/mnt/efs/fs1/vllm/cache',
+    'HF_HUB_CACHE': '/mnt/efs/fs1/vllm/cache',
+    'HF_DATASETS_CACHE': '/mnt/efs/fs1/vllm/cache',
+    '_USAGE_STATS_JSON_PATH': '/stats',
+    'VLLM_CPU_OMP_THREADS_BIND': f'0-{max_cpu}'
+}
+for key, value in env_vars.items():
+    os.environ[key] = os.getenv(key, value)
+
+# Now import remaining modules after environment setup
 import time
 import logging
-import cpuinfo
 import cProfile
 from datetime import datetime
 from typing import List, Tuple, Optional, Dict, Any, Union
 from dataclasses import dataclass
 
 import boto3
-from vllm import LLM, SamplingParams, LLMEngine, RequestOutput, EngineArgs
 from botocore.utils import IMDSFetcher
-from memory_profiler import memory_usage
 import pstats, io
+
+from vllm import LLM, SamplingParams, LLMEngine, RequestOutput, EngineArgs
 
 @dataclass
 class VLLMConfig:
@@ -74,7 +91,7 @@ class VLLMInference:
 
     def __init__(self, config: VLLMConfig):
         self.config = config
-        self.setup_environment()
+        self.check_environment()
         self.setup_logging()
         if self.config.use_llmclass:
             self.llm = self._create_llm()
@@ -84,20 +101,27 @@ class VLLMInference:
             self.llm = None
         self.prompt_template = self._create_prompt_template()
 
-    def setup_environment(self) -> None:
-        """Set up environment variables."""
-        max_cpu = max(0, cpuinfo.get_cpu_info()["count"] - 2)
-        env_vars = {
-            'VLLM_LOGGING_LEVEL': 'DEBUG',
-            'VLLM_CPU_KVCACHE_SPACE': '20',
-            'TRANSFORMERS_CACHE': '/mnt/efs/fs1/vllm/cache',
-            'HF_HOME': '/mnt/efs/fs1/vllm/cache',
-            'HF_DATASETS_CACHE': '/mnt/efs/fs1/vllm/cache',
-            '_USAGE_STATS_JSON_PATH': '/stats',
-            'VLLM_CPU_OMP_THREADS_BIND': f'0-{max_cpu}'
-        }
-        for key, value in env_vars.items():
-            os.environ[key] = os.getenv(key, value)
+    def check_environment(self):
+        from huggingface_hub import try_to_load_from_cache, _CACHED_NO_EXIST, scan_cache_dir
+        import os
+        from pprint import pformat
+
+        hf_cache_info = scan_cache_dir()
+        logging.info(pformat(hf_cache_info))
+
+        filepath = try_to_load_from_cache(
+            repo_id=self.config.model,
+            revision=self.config.model_revision,
+            filename="config.json",
+            repo_type="model",
+        )
+        if isinstance(filepath, str):
+            logging.info(f"{self.config.model} found in cache")
+        elif filepath is _CACHED_NO_EXIST:
+            print("_CACHED_NO_EXIST")
+        else:
+            logging.exception("not found")
+            raise Exception(f"{self.config.model} not found")
 
     def setup_logging(self) -> None:
         """Configure logging."""
@@ -268,11 +292,11 @@ def main():
     profiler = cProfile.Profile()
     t1 = time.perf_counter(), time.process_time()
     profiler.enable()
-    (vllm_inference.run_inference, batch_prompts)
+    vllm_inference.run_inference(batch_prompts)  # Fixed the function call
     profiler.disable()
     t2 = time.perf_counter(), time.process_time()
 
-    vllm_inference.log_performance_metrics(t1,t2, profiler)
+    vllm_inference.log_performance_metrics(t1, t2, profiler)
 
 if __name__ == "__main__":
     main()
