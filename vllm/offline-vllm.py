@@ -7,6 +7,16 @@ for loading prompts from S3 and configurable model parameters.
 
 import os
 import cpuinfo
+import time
+import logging
+import cProfile
+from datetime import datetime
+from typing import List, Tuple, Optional, Dict, Any, Union
+from dataclasses import dataclass
+
+import boto3
+from botocore.utils import IMDSFetcher
+import pstats, io, pprint, re
 
 # Set up environment variables before any VLLM imports
 max_cpu = max(0, cpuinfo.get_cpu_info()["count"] - 2)
@@ -23,18 +33,18 @@ env_vars = {
 for key, value in env_vars.items():
     os.environ[key] = os.getenv(key, value)
 
+"""Configure logging."""
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.FileHandler(f'llama_benchmark_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'),
+        logging.StreamHandler()
+    ]
+)
+
 # Now import remaining modules after environment setup
-import time
-import logging
-import cProfile
-from datetime import datetime
-from typing import List, Tuple, Optional, Dict, Any, Union
-from dataclasses import dataclass
-
-import boto3
-from botocore.utils import IMDSFetcher
-import pstats, io
-
 from vllm import LLM, SamplingParams, LLMEngine, RequestOutput, EngineArgs
 
 @dataclass
@@ -51,6 +61,7 @@ class VLLMConfig:
     enable_prefix_caching: bool
     tokenizer: Optional[str]
     use_llmclass: bool  # Flag to determine whether to use LLM or Engine for inference
+    has_gpu: bool
 
     @classmethod
     def from_env(cls) -> 'VLLMConfig':
@@ -66,7 +77,8 @@ class VLLMConfig:
             sampling_top_p=float(os.getenv("VLLM_SAMPLING_TOP_P", "0.9")),
             enable_prefix_caching=False,  # True will cause intel_extension_for_pytorch error
             tokenizer=None,
-            use_llmclass=os.getenv("use_llmclass", "false").lower() == "true"
+            use_llmclass=os.getenv("use_llmclass", "false").lower() == "true",
+            has_gpu=os.getenv("has_gpu", "true").lower() == "true",
         )
 
 class S3Utilities:
@@ -92,7 +104,6 @@ class VLLMInference:
     def __init__(self, config: VLLMConfig):
         self.config = config
         self.check_environment()
-        self.setup_logging()
         if self.config.use_llmclass:
             self.llm = self._create_llm()
             self.engine = None
@@ -123,54 +134,72 @@ class VLLMInference:
             logging.exception("not found")
             raise Exception(f"{self.config.model} not found")
 
-    def setup_logging(self) -> None:
-        """Configure logging."""
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S',
-            handlers=[
-                logging.FileHandler(f'llama_benchmark_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'),
-                logging.StreamHandler()
-            ]
-        )
-
     def _create_llm(self) -> LLM:
         """Create and return a VLLM LLM instance."""
-        llm = LLM(
-            model=self.config.model,
-            revision=self.config.model_revision,
-            max_model_len=self.config.max_model_len,
-            trust_remote_code=True,
-            tokenizer=self.config.tokenizer,
-            dtype="half",
-            swap_space=3,
-            enforce_eager=True,
-            enable_prefix_caching=self.config.enable_prefix_caching
-        )
+        if self.config.has_gpu:
+            llm = LLM(
+                model=self.config.model,
+                revision=self.config.model_revision,
+                max_model_len=self.config.max_model_len,
+                trust_remote_code=True,
+                tokenizer=self.config.tokenizer,
+                dtype="half",
+                swap_space=3,
+                enforce_eager=True,
+                enable_prefix_caching=self.config.enable_prefix_caching,
+                gpu_memory_utilization=0.90,
+                enable_chunked_prefill=True
+            )
+        else:
+            llm = LLM(
+                model=self.config.model,
+                revision=self.config.model_revision,
+                max_model_len=self.config.max_model_len,
+                trust_remote_code=True,
+                tokenizer=self.config.tokenizer,
+                dtype="half",
+                swap_space=3,
+                enforce_eager=True,
+                enable_prefix_caching=self.config.enable_prefix_caching
+            )            
         logging.info("Created LLM instance")
         return llm
 
     def _create_engine(self) -> LLMEngine:
         """Create and return a VLLM engine instance."""
-        engine_args = EngineArgs(
-            model=self.config.model,
-            revision=self.config.model_revision,
-            max_model_len=self.config.max_model_len,
-            trust_remote_code=True,
-            tokenizer=self.config.tokenizer,
-            dtype="half",
-            swap_space=3,
-            enforce_eager=True,
-            enable_prefix_caching=self.config.enable_prefix_caching
-        )
+        if self.config.has_gpu:
+            engine_args = EngineArgs(
+                model=self.config.model,
+                revision=self.config.model_revision,
+                max_model_len=self.config.max_model_len,
+                trust_remote_code=True,
+                tokenizer=self.config.tokenizer,
+                dtype="half",
+                swap_space=3,
+                enforce_eager=True,
+                enable_prefix_caching=self.config.enable_prefix_caching,
+                gpu_memory_utilization=0.90,
+                enable_chunked_prefill=True
+            )
+        else:
+            engine_args = EngineArgs(
+                model=self.config.model,
+                revision=self.config.model_revision,
+                max_model_len=self.config.max_model_len,
+                trust_remote_code=True,
+                tokenizer=self.config.tokenizer,
+                dtype="half",
+                swap_space=3,
+                enforce_eager=True,
+                enable_prefix_caching=self.config.enable_prefix_caching
+            )            
         logging.info(f"engine_args: {engine_args}")
         return LLMEngine.from_engine_args(engine_args)
 
     def _create_prompt_template(self) -> str:
         """Create the prompt template."""
         return """<|begin_of_sentence|>{system_part}
-    <|User|><INPUT>{MODEL_INPUT}</INPUT>
+    <|User|><{MODEL_INPUT}
     <|Assistant|>
 """
 
@@ -198,13 +227,17 @@ class VLLMInference:
     def _run_llm_inference(self, batch_prompts: List[Tuple[str, SamplingParams]]) -> None:
         """Run inference using LLM's generate method."""
         for prompt, sampling_params in batch_prompts:
-            messages = [
-                {"role": "system", "content": prompt}
-            ]
-            outputs = self.llm.chat(messages, sampling_params=sampling_params)
+            outputs = self.llm.generate(prompt, sampling_params=sampling_params)
             for output in outputs:
                 generated_text = output.outputs[0].text
                 logging.info(f"Generated text: {generated_text!r}")
+                output_text=self.extract_text_from_output_tags(generated_text)
+                if len(output_text) > 0:
+                    logging.info(str(output_text[0]))
+                metrics = output.metrics
+                logging.info("metrics")
+                logging.info(metrics)
+                logging.info(f"counter_prompt_tokens: {metrics.counter_prompt_tokens}")
 
     def _run_engine_inference(self, batch_prompts: List[Tuple[str, SamplingParams]]) -> None:
         """Run inference using Engine's add_request method."""
@@ -218,12 +251,15 @@ class VLLMInference:
             request_outputs: List[RequestOutput] = self.engine.step()
             for request_output in request_outputs:
                 if request_output.finished:
-                    logging.info(f"Request output: {request_output}")
+                    logging.info(f"Generated text: {request_output!r}")
+                    output_text=self.extract_text_from_output_tags(request_output)
+                    if len(output_text) > 0:
+                        logging.info(str(output_text[0]))
 
     def run_inference(self, batch_prompts: List[Tuple[str, SamplingParams]]) -> None:
         """Run inference using either LLM or Engine based on configuration."""
         if self.config.use_llmclass:
-            logging.info("Using LLM for inference")
+            logging.info("Using LLM class for offline inference")
             self._run_llm_inference(batch_prompts)
         else:
             logging.info("Using Engine for inference")
@@ -259,6 +295,20 @@ class VLLMInference:
         except Exception as e:
             logging.warning(f"Failed to fetch instance metadata: {e}")
 
+    def extract_text_from_output_tags(self, text):
+        """
+        Extracts text content within <OUTPUT> and </OUTPUT> tags using regular expressions.
+
+        Args:
+            text: The input string containing the tags.
+
+        Returns:
+            A list of strings, where each string is the extracted text, or an empty list if no matches are found.
+        """
+        pattern = r"<OUTPUT>(.*?)</OUTPUT>"
+        matches = re.findall(pattern, text, re.DOTALL)  # re.DOTALL allows '.' to match newlines
+        return matches
+
 def main():
     """Main entry point for the script."""
     config = VLLMConfig.from_env()
@@ -266,7 +316,7 @@ def main():
     s3_utils = S3Utilities()
 
     # Load system prompt from S3
-    system_content = ""
+    system_content = """Generate a concise step by step. Each step in a sequential number of <STEP> tags, and put the expected output in a <RESULT> tag. For example, if the task was to count to 2, the response would be: <STEP 1></STEP1><STEP 2></STEP 2><RESULT></RESULT>. Wrap the whole response in <OUTPUT> tag."""
     if s3_system_prompt := os.getenv("S3_SYSTEM_PROMPT"):
         bucket, key = s3_utils.parse_s3_path(s3_system_prompt)
         system_content = s3_utils.read_from_s3(bucket, key)
@@ -282,12 +332,13 @@ def main():
         logging.warning("No S3 user prompt files provided")
         return
 
-    for s3_path in s3_user_prompts[:1]:  # Process first prompt only
+    for s3_path in s3_user_prompts:  # Process first prompt only
         bucket, key = s3_utils.parse_s3_path(s3_path)
         user_prompts.append(s3_utils.read_from_s3(bucket, key))
 
     # Prepare and run inference
     batch_prompts = vllm_inference.prepare_prompts(system_content, user_prompts)
+    batch_prompts = batch_prompts[:1]
     
     profiler = cProfile.Profile()
     t1 = time.perf_counter(), time.process_time()
