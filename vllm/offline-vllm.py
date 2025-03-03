@@ -235,9 +235,7 @@ class VLLMInference:
                 if len(output_text) > 0:
                     logging.info(str(output_text[0]))
                 metrics = output.metrics
-                logging.info("metrics")
-                logging.info(metrics)
-                logging.info(f"counter_prompt_tokens: {metrics.counter_prompt_tokens}")
+                logging.info(f"metrics: {metrics}")
 
     def _run_engine_inference(self, batch_prompts: List[Tuple[str, SamplingParams]]) -> None:
         """Run inference using Engine's add_request method."""
@@ -277,7 +275,7 @@ class VLLMInference:
 
             s = io.StringIO()
             ps = pstats.Stats(profiler, stream=s).sort_stats('cumulative').print_stats()
-            logging.info(s.getvalue())            
+            # logging.info(s.getvalue())            
 
             logging.info(
                 f"""Performance Metrics:
@@ -338,7 +336,6 @@ def main():
 
     # Prepare and run inference
     batch_prompts = vllm_inference.prepare_prompts(system_content, user_prompts)
-    batch_prompts = batch_prompts[:1]
     
     profiler = cProfile.Profile()
     t1 = time.perf_counter(), time.process_time()
